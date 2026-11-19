@@ -1,0 +1,18 @@
+# Atualizações mensais das dependências Rust e das actions, agrupadas num PR
+# só por ecossistema (o CI valida cada um).
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      cargo:
+        patterns: ["*"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]
