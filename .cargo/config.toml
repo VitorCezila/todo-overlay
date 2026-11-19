@@ -1,0 +1,4 @@
+# Runtime C embutido no .exe: dispensa o Visual C++ Redistributable
+# (VCRUNTIME140.dll) no PC de quem baixar o app.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
