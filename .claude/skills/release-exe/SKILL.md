@@ -29,7 +29,7 @@ Ao concluir um marco do roadmap, ou quando o usuário quiser instalar a versão 
 7. **Commit** da versão (via PR, como qualquer mudança) e, depois do merge, **tag anotada na `main`**. A mensagem da tag vira as notas da release:
    ```powershell
    git switch main; git pull
-   git tag -a v0.x.0 -F <arquivo-com-as-notas.md>
+   git tag -a v0.x.0 --cleanup=verbatim -F <arquivo-com-as-notas.md>   # verbatim: sem isso o git apaga as linhas "## ..."
    ```
 8. **GitHub Release pelo CI** (só se o usuário pedir push): `git push origin v0.x.0`. O workflow `.github/workflows/release.yml` roda fmt/clippy/test, confere tag = `Cargo.toml`, compila, barra `.exe` ≥ 10 MB ou dependente de `VCRUNTIME140.dll` e publica a release com o `.exe`, o tamanho e o SHA-256. Acompanhe com `gh run watch`. Não publique com `gh release create` local: o `.exe` oficial é o do CI.
 9. Atualizar a instalação local: pedir ao usuário para fechar o app pelo "Sair" da bandeja (não usar `Stop-Process`: pode perder uma edição em andamento) e então:

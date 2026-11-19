@@ -61,7 +61,7 @@ cargo fmt --check; cargo clippy --all-targets -- -D warnings; cargo test
 O `.exe` publicado é compilado pelo GitHub Actions (`.github/workflows/release.yml`). Para lançar uma versão, suba a `version` do `Cargo.toml` e envie uma tag anotada com as notas da versão:
 
 ```powershell
-git tag -a v0.6.0 -m "notas da versão"; git push origin v0.6.0
+git tag -a v0.6.0 --cleanup=verbatim -F notas.md; git push origin v0.6.0
 ```
 
 O CI roda fmt/clippy/testes, confere se a tag bate com o `Cargo.toml`, compila e publica a release com o `.exe`.
