@@ -2,7 +2,7 @@
 
 Overlay de to-do list para Windows: uma janelinha semitransparente, sem borda, sempre no topo, fixa num canto da tela, para consultar rapidamente o que está pendente. Um atalho global mostra/esconde. Uso pessoal (um único usuário), dados 100% locais, sem rede.
 
-**Requisito número 1: ser muito leve.** Meta: `.exe` < 10 MB, RAM ociosa < 40 MB, ~0% de CPU quando ninguém está interagindo. Toda decisão técnica deve respeitar isso.
+**Requisito número 1: ser muito leve.** Meta: `.exe` < 10 MB, RAM ociosa < 80 MB (working set; ~55 MB disso é o driver OpenGL da NVIDIA, que o app não controla), ~0% de CPU quando ninguém está interagindo. Toda decisão técnica deve respeitar isso.
 
 ## Stack
 
@@ -18,7 +18,7 @@ Overlay de to-do list para Windows: uma janelinha semitransparente, sem borda, s
 todo-overlay/
 ├─ Cargo.toml
 ├─ build.rs            # embute assets/icon.ico no .exe (se existir)
-├─ assets/             # icon.ico
+├─ assets/             # icon.ico (gerado por gerar_icone.py; a bandeja o lê do recurso 1 do .exe)
 └─ src/
    ├─ main.rs          # ponto de entrada; #![windows_subsystem = "windows"] (sem console)
    ├─ app.rs           # janela overlay + UI da lista (egui)
@@ -32,6 +32,7 @@ todo-overlay/
 
 Dados do usuário: `%APPDATA%\todo-overlay\tasks.json` e `%APPDATA%\todo-overlay\config.json` (mesmas regras: gravação atômica, corrompido → `.bak`, versão futura → somente leitura).
 "Iniciar com o Windows" não fica no `config.json`: a fonte da verdade é o valor `todo-overlay` na chave `Run` do registro.
+Instalação local: `%LOCALAPPDATA%\Programs\todo-overlay\todo-overlay.exe` (a chave `Run` aponta para lá, nunca para `target\`). Atualizar = Sair pela bandeja, copiar o `.exe` novo por cima, abrir de novo.
 Posição/tamanho da janela: salvos pelo próprio eframe (`persist_window`) em `%APPDATA%\todo-overlay\data\app.ron`.
 
 ## Comandos
