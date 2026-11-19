@@ -256,6 +256,17 @@ impl OverlayApp {
         }
     }
 
+    /// Última chance para uma gravação que falhou (ex.: arquivo travado por
+    /// antivírus) e para uma edição em andamento: confirma a edição e grava.
+    fn gravar_pendencias(&mut self) {
+        if let Some(ed) = self.editando.take() {
+            self.pendente_salvar |= self.lista.edit(ed.id, &ed.texto);
+        }
+        if self.pendente_salvar {
+            self.salvar();
+        }
+    }
+
     /// Edição só é permitida quando dá para gravar: senão o usuário mexeria
     /// numa lista que seria descartada ao fechar.
     fn editavel(&self) -> bool {
@@ -389,6 +400,20 @@ impl eframe::App for OverlayApp {
     /// quando alguém chama `request_repaint`), por isso o Sair da bandeja
     /// funciona sem mostrar a janela.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Logoff/desligamento (ver `hotkey::Encerramento`): o `on_exit` não
+        // vai rodar, então grava aqui e libera a thread de fundo.
+        let pedido = self
+            .fundo
+            .as_ref()
+            .and_then(|f| f.encerramento.as_ref())
+            .is_some_and(|e| e.pedido());
+        if pedido {
+            self.gravar_pendencias();
+            if let Some(e) = self.fundo.as_ref().and_then(|f| f.encerramento.as_ref()) {
+                e.confirmar();
+            }
+        }
+
         let fechar = ctx.input(|i| i.viewport().close_requested());
         if fechar && !self.saindo.load(Ordering::SeqCst) && self.pode_esconder() {
             // Alt+F4 (ou outro pedido do sistema): só esconde. Sair é pela bandeja.
@@ -419,15 +444,9 @@ impl eframe::App for OverlayApp {
         alcas_redimensionar(ui, janela);
     }
 
-    /// Última chance para uma gravação que falhou (ex.: arquivo travado por
-    /// antivírus) e para uma edição em andamento ao sair pela bandeja.
+    /// Ao sair pela bandeja (o logoff/desligamento passa por `logic`).
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        if let Some(ed) = self.editando.take() {
-            self.pendente_salvar |= self.lista.edit(ed.id, &ed.texto);
-        }
-        if self.pendente_salvar {
-            self.salvar();
-        }
+        self.gravar_pendencias();
     }
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
