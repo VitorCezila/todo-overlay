@@ -24,13 +24,14 @@ todo-overlay/
    ├─ app.rs           # janela overlay + UI da lista (egui)
    ├─ model.rs         # Task / TaskList — lógica pura, SEM dependência de UI, com testes
    ├─ storage.rs       # load/save de tasks.json com gravação atômica + migrações
-   ├─ config.rs        # Config (atalho, opacidade, posição/tamanho, autostart)
+   ├─ config.rs        # Config (atalho, opacidade, autostart)
    ├─ hotkey.rs        # registro do atalho global (thread própria)
    ├─ tray.rs          # ícone na bandeja: Mostrar/Esconder, Configurações, Sair
    └─ autostart.rs     # HKCU\Software\Microsoft\Windows\CurrentVersion\Run
 ```
 
 Dados do usuário: `%APPDATA%\todo-overlay\tasks.json` e `%APPDATA%\todo-overlay\config.json`.
+Posição/tamanho da janela: salvos pelo próprio eframe (`persist_window`) em `%APPDATA%\todo-overlay\data\app.ron`.
 
 ## Comandos
 
