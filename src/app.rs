@@ -9,19 +9,23 @@
 //! últimas apagadas. Grava `tasks.json` só quando a lista muda (ver `storage`).
 //! Marco 3: `Ctrl+Alt+T` (`hotkey`) e o ícone da bandeja (`tray`) mostram/escondem;
 //! o X e o Alt+F4 só escondem — sair é pela bandeja (ver `logic`).
+//! Marco 4: a engrenagem da barra (ou "Configurações" na bandeja) troca a
+//! lista pela tela de configurações: opacidade, atalho e iniciar com o Windows.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use eframe::egui::{
-    self, Align, Align2, Color32, CursorIcon, FontId, Id, Key, Label, Layout, PointerButton, Pos2,
-    Rect, ResizeDirection, RichText, ScrollArea, Sense, Stroke, TextEdit, Vec2, ViewportCommand,
-    pos2, vec2,
+    self, Align, Align2, Color32, CursorIcon, Event, FontId, Id, Key, Label, Layout, PointerButton,
+    Pos2, Rect, ResizeDirection, RichText, ScrollArea, Sense, Slider, Stroke, TextEdit, Vec2,
+    ViewportCommand, pos2, vec2,
 };
 
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
+use crate::autostart;
+use crate::config::{self, Config};
 use crate::hotkey::{self, Fundo, Janela};
 use crate::model::{Task, TaskList};
 use crate::storage;
@@ -31,8 +35,6 @@ const TAMANHO_INICIAL: Vec2 = Vec2::new(320.0, 420.0);
 const TAMANHO_MINIMO: Vec2 = Vec2::new(200.0, 120.0);
 /// Distância da janela às bordas da área de trabalho na primeira execução.
 const MARGEM_CANTO: f32 = 16.0;
-/// Opacidade do fundo (0–255). Vira configuração no marco 4.
-const OPACIDADE: u8 = 200;
 const ALTURA_BARRA: f32 = 24.0;
 /// Espessura das alças invisíveis de redimensionamento nas bordas.
 const BORDA_RESIZE: f32 = 6.0;
@@ -60,6 +62,7 @@ pub fn run() -> anyhow::Result<()> {
     };
 
     let mut app = OverlayApp::carregar();
+    app.ajustes = Ajustes::carregar();
     eframe::run_native(
         NOME_APP,
         options,
@@ -139,6 +142,89 @@ struct OverlayApp {
     fundo: Option<Fundo>,
     /// Avisos do atalho/bandeja (sobrevivem ao "Tentar de novo").
     aviso_fundo: Option<String>,
+    /// `config.json` e o estado da tela de configurações.
+    ajustes: Ajustes,
+}
+
+#[derive(Default)]
+struct Ajustes {
+    config: Config,
+    /// `None` se `%APPDATA%` não foi localizado: vale só nesta execução.
+    caminho: Option<PathBuf>,
+    /// Não gravar por cima (versão futura ou ilegível).
+    somente_leitura: bool,
+    /// Tela de configurações no lugar da lista.
+    aberta: bool,
+    /// Esperando a combinação de teclas do novo atalho.
+    capturando: bool,
+    /// Troca de atalho pedida à thread de fundo, sem resposta ainda.
+    trocando: bool,
+    /// Estado da chave `Run`, lido ao abrir a tela (`None` = erro ao ler).
+    autostart: Option<autostart::Estado>,
+    /// Último conteúdo gravado/lido de `config.json`: não regravar igual
+    /// (soltar o slider sem mudar, setas repetidas, clique no trilho).
+    salvo: Option<Config>,
+    /// Aviso do carregamento do config ou de erro nesta tela.
+    aviso: Option<String>,
+    /// Problema com o atalho (em uso etc.), mostrado também na lista.
+    aviso_atalho: Option<String>,
+}
+
+impl Ajustes {
+    fn carregar() -> Self {
+        let mut a = Self::default();
+        match config::caminho_padrao() {
+            Ok(caminho) => {
+                match config::load(&caminho) {
+                    Ok(c) => {
+                        a.salvo = Some(c.config.clone());
+                        a.config = c.config;
+                        a.somente_leitura = c.somente_leitura;
+                        a.aviso = c.aviso;
+                    }
+                    Err(e) => {
+                        a.somente_leitura = true;
+                        a.aviso = Some(format!("Erro ao carregar as configurações: {e:#}"));
+                    }
+                }
+                a.caminho = Some(caminho);
+            }
+            Err(e) => a.aviso = Some(format!("Configurações não serão salvas: {e:#}")),
+        }
+        a
+    }
+
+    /// Chamado só quando um valor muda (nunca por frame).
+    fn salvar(&mut self) {
+        let Some(caminho) = &self.caminho else {
+            return;
+        };
+        if self.somente_leitura || self.salvo.as_ref() == Some(&self.config) {
+            return;
+        }
+        match config::save(caminho, &self.config) {
+            Ok(()) => self.salvo = Some(self.config.clone()),
+            Err(e) => self.aviso = Some(format!("Erro ao salvar as configurações: {e:#}")),
+        }
+    }
+
+    fn abrir(&mut self) {
+        self.aberta = true;
+        self.capturando = false;
+        // Uma leitura do registro por abertura, fora do caminho de cada frame.
+        self.autostart = match autostart::estado() {
+            Ok(v) => Some(v),
+            Err(e) => {
+                self.aviso = Some(format!("{e:#}"));
+                None
+            }
+        };
+    }
+
+    fn fechar(&mut self) {
+        self.aberta = false;
+        self.capturando = false;
+    }
 }
 
 struct Edicao {
@@ -170,6 +256,7 @@ impl OverlayApp {
             saindo: Arc::new(AtomicBool::new(false)),
             fundo: None,
             aviso_fundo: None,
+            ajustes: Ajustes::default(),
         };
         match storage::caminho_padrao() {
             Ok(caminho) => {
@@ -203,21 +290,29 @@ impl OverlayApp {
             }
         };
         let janela = Janela(hwnd);
-        let fundo = hotkey::iniciar(janela, cc.egui_ctx.clone(), self.saindo.clone());
+        let mut fundo = hotkey::iniciar(
+            janela,
+            cc.egui_ctx.clone(),
+            self.saindo.clone(),
+            self.ajustes.config.atalho(),
+        );
         if !fundo.avisos.is_empty() {
             self.aviso_fundo = Some(fundo.avisos.join("\n"));
         }
+        self.ajustes.aviso_atalho = fundo.aviso_atalho.take();
         self.janela = Some(janela);
         self.fundo = Some(fundo);
     }
 
-    /// Recarrega `tasks.json` sem perder a janela, a bandeja e o atalho.
+    /// Recarrega `tasks.json` sem perder a janela, a bandeja, o atalho e as
+    /// configurações.
     fn recarregar(&mut self) {
         let mut novo = Self::carregar();
         novo.janela = self.janela;
         novo.saindo = self.saindo.clone();
         novo.fundo = self.fundo.take();
         novo.aviso_fundo = self.aviso_fundo.take();
+        novo.ajustes = std::mem::take(&mut self.ajustes);
         *self = novo;
     }
 
@@ -273,6 +368,13 @@ impl OverlayApp {
         }
     }
 
+    /// Troca a lista pela tela de configurações. Uma edição em andamento é
+    /// confirmada antes: o TextEdit some com a lista e não perderia o foco.
+    fn abrir_config(&mut self) {
+        self.gravar_pendencias();
+        self.ajustes.abrir();
+    }
+
     /// Edição só é permitida quando dá para gravar: senão o usuário mexeria
     /// numa lista que seria descartada ao fechar.
     fn editavel(&self) -> bool {
@@ -283,7 +385,12 @@ impl OverlayApp {
         let mut mudou = false;
         let editavel = self.editavel();
 
-        for msg in [&self.aviso_fundo, &self.mensagem].into_iter().flatten() {
+        let avisos = [
+            &self.aviso_fundo,
+            &self.ajustes.aviso_atalho,
+            &self.mensagem,
+        ];
+        for msg in avisos.into_iter().flatten() {
             ui.colored_label(ui.visuals().warn_fg_color, msg);
         }
         if self.pode_recarregar && ui.button("Tentar de novo").clicked() {
@@ -295,6 +402,9 @@ impl OverlayApp {
         ui.add_enabled_ui(editavel, |ui| {
             let campo = ui.add(
                 TextEdit::singleline(&mut self.novo_texto)
+                    // Id explícito: avisos acima (ex.: o do atalho) aparecem
+                    // e somem e mudariam o id automático, tirando o foco.
+                    .id(Id::unique("nova-tarefa"))
                     .hint_text("Nova tarefa…")
                     .desired_width(f32::INFINITY),
             );
@@ -357,6 +467,163 @@ impl OverlayApp {
         }
         if mudou {
             self.salvar();
+        }
+    }
+
+    /// Tela de configurações (no lugar da lista).
+    fn tela_config(&mut self, ui: &mut egui::Ui) {
+        let a = &mut self.ajustes;
+        // Janela escondida (atalho, X) ou sem foco: cancela a captura, senão
+        // a primeira tecla ao voltar viraria o atalho.
+        if a.capturando && !ui.input(|i| i.focused) {
+            a.capturando = false;
+        }
+
+        ui.label("Opacidade do fundo");
+        let resp = ui.add(
+            Slider::new(
+                &mut a.config.opacity,
+                config::OPACIDADE_MIN..=config::OPACIDADE_MAX,
+            )
+            .custom_formatter(|v, _| format!("{:.0} %", v * 100.0))
+            .custom_parser(|s| {
+                let s = s.trim().trim_end_matches('%').trim().replace(',', ".");
+                // "80" é 80 %; "0.8" (até 1) já é a fração.
+                s.parse::<f64>()
+                    .ok()
+                    .map(|v| if v > 1.0 { v / 100.0 } else { v })
+            }),
+        );
+        // Aplica ao vivo (o Frame lê a opacidade a cada frame), mas só grava
+        // ao soltar o arrasto ou numa mudança pelo teclado.
+        if resp.drag_stopped() || (resp.changed() && !resp.dragged()) {
+            a.salvar();
+        }
+        ui.add_space(8.0);
+
+        ui.label("Atalho para mostrar/esconder");
+        ui.horizontal(|ui| {
+            if a.capturando {
+                ui.strong("Pressione a combinação…");
+                if ui.small_button("Cancelar").clicked() {
+                    a.capturando = false;
+                }
+            } else if a.trocando {
+                ui.weak("Registrando…");
+            } else {
+                ui.strong(&a.config.hotkey);
+                if ui.button("Alterar…").clicked() {
+                    a.capturando = true;
+                    a.aviso = None;
+                }
+            }
+        });
+        if a.capturando {
+            // Combinação registrada por outro programa (inclusive o atalho
+            // atual, que esconde a janela) é interceptada pelo Windows e nem
+            // chega aqui: daí a segunda frase.
+            ui.weak(
+                "Use Ctrl ou Alt com outra tecla. Esc cancela.                  Se nada acontecer, a combinação já está em uso.",
+            );
+            let tecla = ui.input(|i| {
+                i.events.iter().find_map(|e| match e {
+                    // Tecla física: no ABNT2, Ctrl+Alt+Q chega como "/" (AltGr)
+                    // na lógica, e o RegisterHotKey usa a posição da letra.
+                    Event::Key {
+                        key,
+                        physical_key,
+                        pressed: true,
+                        repeat: false,
+                        modifiers,
+                    } => Some((physical_key.unwrap_or(*key), *modifiers)),
+                    _ => None,
+                })
+            });
+            match tecla {
+                Some((Key::Escape, _)) => a.capturando = false,
+                Some((k, m)) => {
+                    // Sem modificador ou tecla não suportada (inclusive o
+                    // próprio Ctrl/Alt): continua esperando.
+                    if let Some(novo) = hotkey::atalho_capturado(m, k) {
+                        if let Some(motivo) = config::recusa(&novo) {
+                            a.aviso = Some(format!(
+                                "{} não pode ser usado: {motivo}",
+                                config::texto_atalho(&novo)
+                            ));
+                        } else {
+                            a.capturando = false;
+                            a.aviso = None;
+                            match self.fundo.as_ref().map(|f| f.trocar_atalho(novo)) {
+                                Some(Ok(())) => a.trocando = true,
+                                Some(Err(e)) => a.aviso = Some(e),
+                                None => {
+                                    a.aviso = Some("Troca de atalho indisponível.".into());
+                                }
+                            }
+                        }
+                    }
+                }
+                None => {}
+            }
+        }
+        // Logo abaixo do atalho (e não no topo): um aviso que aparece acima do
+        // slider mudaria o id automático dele no meio da digitação.
+        for msg in [&a.aviso, &a.aviso_atalho].into_iter().flatten() {
+            ui.colored_label(ui.visuals().warn_fg_color, msg);
+        }
+        ui.add_space(8.0);
+
+        match a.autostart.clone() {
+            Some(estado) => {
+                let mut ligado = estado != autostart::Estado::Desligado;
+                let mut mudar = None;
+                if ui.checkbox(&mut ligado, "Iniciar com o Windows").changed() {
+                    mudar = Some(ligado);
+                }
+                if let autostart::Estado::OutroCaminho(v) = &estado {
+                    ui.weak(format!("Aponta para outro programa: {v}"));
+                    if ui.small_button("Usar este .exe").clicked() {
+                        mudar = Some(true);
+                    }
+                }
+                if let Some(ligar) = mudar {
+                    let r = if ligar {
+                        autostart::ativar()
+                    } else {
+                        autostart::desativar()
+                    };
+                    if let Err(e) = r {
+                        a.aviso = Some(format!("{e:#}"));
+                    }
+                    // Relê: o checkbox mostra o que ficou no registro.
+                    a.autostart = autostart::estado().ok();
+                }
+            }
+            None => {
+                ui.weak("Iniciar com o Windows: indisponível");
+            }
+        }
+        ui.add_space(12.0);
+
+        if ui.button("Voltar").clicked() {
+            a.fechar();
+        }
+    }
+
+    /// Resposta da thread de fundo a uma troca de atalho.
+    fn atalho_trocado(&mut self, r: hotkey::ResultadoAtalho) {
+        let a = &mut self.ajustes;
+        a.trocando = false;
+        match r {
+            Ok(hk) => {
+                a.aviso_atalho = None;
+                let texto = config::texto_atalho(&hk);
+                if texto != a.config.hotkey {
+                    a.config.hotkey = texto;
+                    a.salvar();
+                }
+            }
+            Err(e) => a.aviso = Some(e),
         }
     }
 }
@@ -500,6 +767,14 @@ impl eframe::App for OverlayApp {
             }
         }
 
+        // A thread de fundo acorda o eframe (request_repaint) nos dois casos.
+        if let Some(r) = self.fundo.as_ref().and_then(Fundo::resultado_atalho) {
+            self.atalho_trocado(r);
+        }
+        if self.fundo.as_ref().is_some_and(Fundo::pedido_config) {
+            self.abrir_config();
+        }
+
         let fechar = ctx.input(|i| i.viewport().close_requested());
         if fechar && !self.saindo.load(Ordering::SeqCst) && self.pode_esconder() {
             // Alt+F4 (ou outro pedido do sistema): só esconde. Sair é pela bandeja.
@@ -514,16 +789,27 @@ impl eframe::App for OverlayApp {
         let janela = ui.max_rect();
 
         egui::Frame::new()
-            .fill(Color32::from_black_alpha(OPACIDADE))
+            .fill(Color32::from_black_alpha(self.ajustes.config.alfa()))
             .corner_radius(8)
             .inner_margin(8)
             .show(ui, |ui| {
                 ui.set_min_size(ui.available_size());
-                if barra_titulo(ui, self.lista.pending_count()) {
-                    self.esconder_ou_fechar(ui.ctx());
+                let aberta = self.ajustes.aberta;
+                match barra_titulo(ui, self.lista.pending_count(), aberta) {
+                    Some(Botao::Fechar) => self.esconder_ou_fechar(ui.ctx()),
+                    Some(Botao::Config) if aberta => self.ajustes.fechar(),
+                    Some(Botao::Config) => self.abrir_config(),
+                    None => {}
                 }
                 ui.separator();
-                self.conteudo(ui);
+                if self.ajustes.aberta {
+                    // Janela baixa: rola em vez de cortar avisos e botões.
+                    ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| self.tela_config(ui));
+                } else {
+                    self.conteudo(ui);
+                }
             });
 
         // Por último, para ficar por cima do conteúdo nas bordas.
@@ -540,15 +826,22 @@ impl eframe::App for OverlayApp {
     }
 }
 
-/// Barra própria: arrastar move a janela. Devolve `true` se o X foi clicado.
-fn barra_titulo(ui: &mut egui::Ui, pendentes: usize) -> bool {
+enum Botao {
+    Fechar,
+    Config,
+}
+
+/// Barra própria: arrastar move a janela. Devolve o botão clicado.
+fn barra_titulo(ui: &mut egui::Ui, pendentes: usize, config_aberta: bool) -> Option<Botao> {
     let (barra, arrasto) =
-        ui.allocate_exact_size(vec2(ui.available_width(), ALTURA_BARRA), Sense::drag());
+        ui.allocate_exact_size(vec2(ui.available_width(), ALTURA_BARRA), Sense::DRAG);
     if arrasto.drag_started_by(PointerButton::Primary) {
         ui.ctx().send_viewport_cmd(ViewportCommand::StartDrag);
     }
 
-    let titulo = if pendentes == 0 {
+    let titulo = if config_aberta {
+        "Configurações".to_owned()
+    } else if pendentes == 0 {
         "Tarefas".to_owned()
     } else {
         format!("Tarefas ({pendentes})")
@@ -566,7 +859,7 @@ fn barra_titulo(ui: &mut egui::Ui, pendentes: usize) -> bool {
         Vec2::splat(ALTURA_BARRA),
     );
     let fechar = ui
-        .interact(botao, Id::unique("fechar"), Sense::click())
+        .interact(botao, Id::unique("fechar"), Sense::CLICK)
         .on_hover_text("Esconder");
     let cor = if fechar.hovered() {
         ui.visuals().strong_text_color()
@@ -579,7 +872,42 @@ fn barra_titulo(ui: &mut egui::Ui, pendentes: usize) -> bool {
         .line_segment([x.left_top(), x.right_bottom()], traco);
     ui.painter()
         .line_segment([x.right_top(), x.left_bottom()], traco);
-    fechar.clicked()
+
+    let engrenagem = botao.translate(vec2(-ALTURA_BARRA, 0.0));
+    let dica = if config_aberta {
+        "Voltar à lista"
+    } else {
+        "Configurações"
+    };
+    // Sense::CLICK (sem FOCUSABLE): não vira parada do Tab.
+    let config = ui
+        .interact(engrenagem, Id::unique("config"), Sense::CLICK)
+        .on_hover_text(dica);
+    desenhar_engrenagem(ui, engrenagem.center(), config.hovered() || config_aberta);
+
+    if fechar.clicked() {
+        Some(Botao::Fechar)
+    } else if config.clicked() {
+        Some(Botao::Config)
+    } else {
+        None
+    }
+}
+
+/// Engrenagem de ~14 px desenhada com o painter (sem depender de glifo).
+fn desenhar_engrenagem(ui: &egui::Ui, c: Pos2, destaque: bool) {
+    let cor = if destaque {
+        ui.visuals().strong_text_color()
+    } else {
+        ui.visuals().weak_text_color()
+    };
+    let p = ui.painter();
+    p.circle_stroke(c, 3.5, Stroke::new(1.5, cor));
+    for i in 0..8 {
+        let ang = i as f32 * std::f32::consts::FRAC_PI_4;
+        let dir = vec2(ang.cos(), ang.sin());
+        p.line_segment([c + dir * 4.5, c + dir * 7.0], Stroke::new(2.0, cor));
+    }
 }
 
 /// Alças invisíveis nas 4 bordas e 4 cantos (a janela sem borda não tem resize nativo).
