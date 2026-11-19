@@ -4,12 +4,20 @@
 //! arrastável pela barra de título e redimensionável pelas bordas. Posição e
 //! tamanho são lembrados pelo eframe (`persist_window`, em
 //! `%APPDATA%\todo-overlay\data\app.ron`).
-//! Marco 2: UI para adicionar/editar/concluir/apagar tarefas.
+//! Marco 2: lista de tarefas — Enter no campo adiciona, duplo clique edita,
+//! checkbox conclui, 🗑 (no hover) apaga. Grava `tasks.json` só quando a
+//! lista muda (ver `storage`).
+
+use std::path::PathBuf;
 
 use eframe::egui::{
-    self, Align2, Color32, CursorIcon, FontId, Id, PointerButton, Pos2, Rect, ResizeDirection,
-    Sense, Stroke, Vec2, ViewportCommand, pos2, vec2,
+    self, Align, Align2, Button, Color32, CursorIcon, FontId, Id, Key, Label, Layout,
+    PointerButton, Pos2, Rect, ResizeDirection, RichText, ScrollArea, Sense, Stroke, TextEdit,
+    Vec2, ViewportCommand, pos2, vec2,
 };
+
+use crate::model::{Task, TaskList};
+use crate::storage;
 
 const NOME_APP: &str = "todo-overlay";
 const TAMANHO_INICIAL: Vec2 = Vec2::new(320.0, 420.0);
@@ -44,7 +52,8 @@ pub fn run() -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    eframe::run_native(NOME_APP, options, Box::new(|_cc| Ok(Box::new(OverlayApp))))
+    let app = OverlayApp::carregar();
+    eframe::run_native(NOME_APP, options, Box::new(move |_cc| Ok(Box::new(app))))
         .map_err(|e| anyhow::anyhow!("falha ao abrir a janela: {e}"))
 }
 
@@ -84,7 +93,227 @@ fn posicao_canto(area: [f32; 4], tamanho: Vec2) -> Pos2 {
     pos2(x, topo + MARGEM_CANTO)
 }
 
-struct OverlayApp;
+/// Largura reservada para o botão de apagar (sempre reservada, para o texto
+/// não "pular" quando o botão aparece no hover).
+const LARGURA_APAGAR: f32 = 20.0;
+
+struct OverlayApp {
+    lista: TaskList,
+    /// `None` se `%APPDATA%` não foi localizado: o app funciona, mas não grava.
+    caminho: Option<PathBuf>,
+    /// Não gravar por cima do arquivo (versão futura ou ilegível).
+    somente_leitura: bool,
+    novo_texto: String,
+    editando: Option<Edicao>,
+    /// Aviso do carregamento ou erro de gravação, mostrado na janela.
+    mensagem: Option<String>,
+    /// A última gravação falhou: tentar de novo na próxima mudança e ao sair.
+    pendente_salvar: bool,
+    /// O carregamento falhou por I/O (ex.: arquivo travado pelo OneDrive):
+    /// oferecer "Tentar de novo" em vez de travar a sessão.
+    pode_recarregar: bool,
+}
+
+struct Edicao {
+    id: u64,
+    texto: String,
+    /// Pedir foco no primeiro frame da edição.
+    focar: bool,
+}
+
+enum Acao {
+    Alternar(u64),
+    Apagar(u64),
+    Editar(u64, String),
+}
+
+impl OverlayApp {
+    fn carregar() -> Self {
+        let mut app = Self {
+            lista: TaskList::default(),
+            caminho: None,
+            somente_leitura: false,
+            novo_texto: String::new(),
+            editando: None,
+            mensagem: None,
+            pendente_salvar: false,
+            pode_recarregar: false,
+        };
+        match storage::caminho_padrao() {
+            Ok(caminho) => {
+                match storage::load(&caminho) {
+                    Ok(c) => {
+                        app.lista = c.list;
+                        app.somente_leitura = c.somente_leitura;
+                        app.mensagem = c.aviso;
+                    }
+                    Err(e) => {
+                        // Arquivo existe mas não pôde ser lido: nunca sobrescrever.
+                        app.somente_leitura = true;
+                        app.pode_recarregar = true;
+                        app.mensagem = Some(format!("Erro ao carregar: {e:#}"));
+                    }
+                }
+                app.caminho = Some(caminho);
+            }
+            Err(e) => app.mensagem = Some(format!("Tarefas não serão salvas: {e:#}")),
+        }
+        app
+    }
+
+    fn salvar(&mut self) {
+        let Some(caminho) = &self.caminho else {
+            return;
+        };
+        if self.somente_leitura {
+            return;
+        }
+        self.pendente_salvar = false;
+        match storage::save(caminho, &self.lista) {
+            // Limpa só um erro de gravação anterior, não avisos do carregamento.
+            Ok(()) => {
+                if self
+                    .mensagem
+                    .as_deref()
+                    .is_some_and(|m| m.starts_with(PREFIXO_ERRO_SALVAR))
+                {
+                    self.mensagem = None;
+                }
+            }
+            Err(e) => {
+                self.pendente_salvar = true;
+                self.mensagem = Some(format!("{PREFIXO_ERRO_SALVAR}{e:#}"));
+            }
+        }
+    }
+
+    /// Edição só é permitida quando dá para gravar: senão o usuário mexeria
+    /// numa lista que seria descartada ao fechar.
+    fn editavel(&self) -> bool {
+        self.caminho.is_some() && !self.somente_leitura
+    }
+
+    fn conteudo(&mut self, ui: &mut egui::Ui) {
+        let mut mudou = false;
+        let editavel = self.editavel();
+
+        if let Some(msg) = &self.mensagem {
+            ui.colored_label(ui.visuals().warn_fg_color, msg);
+        }
+        if self.pode_recarregar && ui.button("Tentar de novo").clicked() {
+            *self = Self::carregar();
+            return;
+        }
+
+        let mut acoes = Vec::new();
+        ui.add_enabled_ui(editavel, |ui| {
+            let campo = ui.add(
+                TextEdit::singleline(&mut self.novo_texto)
+                    .hint_text("Nova tarefa…")
+                    .desired_width(f32::INFINITY),
+            );
+            if campo.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                if self.lista.add(&self.novo_texto).is_some() {
+                    mudou = true;
+                    self.novo_texto.clear();
+                }
+                campo.request_focus(); // continua digitando a próxima
+            }
+            ui.add_space(4.0);
+
+            ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    if self.lista.tasks.is_empty() {
+                        ui.weak("Nenhuma tarefa ainda");
+                    }
+                    for task in &self.lista.tasks {
+                        linha(ui, task, &mut self.editando, &mut acoes);
+                    }
+                });
+        });
+
+        for acao in acoes {
+            mudou |= match acao {
+                Acao::Alternar(id) => self.lista.toggle(id),
+                Acao::Apagar(id) => self.lista.remove(id),
+                Acao::Editar(id, texto) => self.lista.edit(id, &texto),
+            };
+        }
+        if mudou {
+            self.salvar();
+        }
+    }
+}
+
+const PREFIXO_ERRO_SALVAR: &str = "Erro ao salvar: ";
+
+/// Uma tarefa: checkbox, texto (duplo clique edita) e botão de apagar no hover.
+fn linha(ui: &mut egui::Ui, task: &Task, editando: &mut Option<Edicao>, acoes: &mut Vec<Acao>) {
+    ui.horizontal(|ui| {
+        let mut done = task.done;
+        if ui.checkbox(&mut done, "").changed() {
+            acoes.push(Acao::Alternar(task.id));
+        }
+
+        let espaco = ui.spacing().item_spacing.x;
+        let largura_texto = (ui.available_width() - LARGURA_APAGAR - espaco).max(0.0);
+
+        match editando.as_mut().filter(|e| e.id == task.id) {
+            Some(ed) => {
+                let resp = ui.add(TextEdit::singleline(&mut ed.texto).desired_width(largura_texto));
+                if ed.focar {
+                    resp.request_focus();
+                    ed.focar = false;
+                }
+                // Esc também tira o foco; checar antes para cancelar em vez de salvar.
+                if ui.input(|i| i.key_pressed(Key::Escape)) {
+                    *editando = None;
+                } else if resp.lost_focus()
+                    && let Some(ed) = editando.take()
+                {
+                    acoes.push(Acao::Editar(ed.id, ed.texto));
+                }
+            }
+            None => {
+                let mut texto = RichText::new(&task.text);
+                if task.done {
+                    texto = texto.strikethrough().weak();
+                }
+                let resp = ui
+                    .allocate_ui_with_layout(
+                        vec2(largura_texto, 0.0),
+                        Layout::top_down(Align::Min),
+                        |ui| {
+                            ui.set_min_width(largura_texto);
+                            ui.add(Label::new(texto).wrap().sense(Sense::click()))
+                        },
+                    )
+                    .inner;
+                if resp.double_clicked() {
+                    *editando = Some(Edicao {
+                        id: task.id,
+                        texto: task.text.clone(),
+                        focar: true,
+                    });
+                }
+            }
+        }
+
+        // Área da linha até aqui, estendida até a borda direita.
+        let area = Rect::from_min_max(
+            ui.min_rect().min,
+            pos2(ui.max_rect().right(), ui.min_rect().bottom()),
+        );
+        let visivel = ui.rect_contains_pointer(area);
+        let apagar = ui
+            .add_visible(visivel, Button::new("🗑").frame(false))
+            .on_hover_text("Apagar");
+        if apagar.clicked() {
+            acoes.push(Acao::Apagar(task.id));
+        }
+    });
+}
 
 impl eframe::App for OverlayApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -96,13 +325,24 @@ impl eframe::App for OverlayApp {
             .inner_margin(8)
             .show(ui, |ui| {
                 ui.set_min_size(ui.available_size());
-                barra_titulo(ui);
+                barra_titulo(ui, self.lista.pending_count());
                 ui.separator();
-                ui.weak("Nenhuma tarefa ainda");
+                self.conteudo(ui);
             });
 
         // Por último, para ficar por cima do conteúdo nas bordas.
         alcas_redimensionar(ui, janela);
+    }
+
+    /// Última chance para uma gravação que falhou (ex.: arquivo travado por
+    /// antivírus) e para uma edição em andamento fechada com Alt+F4.
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        if let Some(ed) = self.editando.take() {
+            self.pendente_salvar |= self.lista.edit(ed.id, &ed.texto);
+        }
+        if self.pendente_salvar {
+            self.salvar();
+        }
     }
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
@@ -111,17 +351,22 @@ impl eframe::App for OverlayApp {
 }
 
 /// Barra própria: arrastar move a janela; o botão fecha o app.
-fn barra_titulo(ui: &mut egui::Ui) {
+fn barra_titulo(ui: &mut egui::Ui, pendentes: usize) {
     let (barra, arrasto) =
         ui.allocate_exact_size(vec2(ui.available_width(), ALTURA_BARRA), Sense::drag());
     if arrasto.drag_started_by(PointerButton::Primary) {
         ui.ctx().send_viewport_cmd(ViewportCommand::StartDrag);
     }
 
+    let titulo = if pendentes == 0 {
+        "Tarefas".to_owned()
+    } else {
+        format!("Tarefas ({pendentes})")
+    };
     ui.painter().text(
         barra.left_center(),
         Align2::LEFT_CENTER,
-        "Tarefas",
+        titulo,
         FontId::proportional(14.0),
         ui.visuals().strong_text_color(),
     );
