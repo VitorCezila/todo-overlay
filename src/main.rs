@@ -7,6 +7,7 @@ mod config;
 mod hotkey;
 mod model;
 mod storage;
+mod tema;
 mod tray;
 
 fn main() -> anyhow::Result<()> {

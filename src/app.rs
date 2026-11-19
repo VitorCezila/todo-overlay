@@ -17,8 +17,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use eframe::egui::{
-    self, Align, Align2, Color32, CursorIcon, Event, FontId, Id, Key, Label, Layout, PointerButton,
-    Pos2, Rect, ResizeDirection, RichText, ScrollArea, Sense, Slider, Stroke, TextEdit, Vec2,
+    self, Align, Align2, CursorIcon, Event, FontId, Id, Key, Label, Layout, PointerButton, Pos2,
+    Rect, ResizeDirection, RichText, ScrollArea, Sense, Slider, Stroke, TextEdit, Vec2,
     ViewportCommand, pos2, vec2,
 };
 
@@ -29,6 +29,7 @@ use crate::config::{self, Config};
 use crate::hotkey::{self, Fundo, Janela};
 use crate::model::{Task, TaskList};
 use crate::storage;
+use crate::tema::{self, cor};
 
 const NOME_APP: &str = "todo-overlay";
 const TAMANHO_INICIAL: Vec2 = Vec2::new(320.0, 420.0);
@@ -67,6 +68,7 @@ pub fn run() -> anyhow::Result<()> {
         NOME_APP,
         options,
         Box::new(move |cc| {
+            tema::aplicar(&cc.egui_ctx);
             app.iniciar_fundo(cc);
             Ok(Box::new(app))
         }),
@@ -405,7 +407,8 @@ impl OverlayApp {
                     // Id explícito: avisos acima (ex.: o do atalho) aparecem
                     // e somem e mudariam o id automático, tirando o foco.
                     .id(Id::unique("nova-tarefa"))
-                    .hint_text("Nova tarefa…")
+                    .prefix(RichText::new("❯").color(cor::VERDE))
+                    .hint_text("nova tarefa…")
                     .desired_width(f32::INFINITY),
             );
             if campo.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
@@ -632,9 +635,9 @@ const PREFIXO_ERRO_SALVAR: &str = "Erro ao salvar: ";
 
 /// Uma tarefa: checkbox, texto (duplo clique edita) e botão de apagar no hover.
 fn linha(ui: &mut egui::Ui, task: &Task, editando: &mut Option<Edicao>, acoes: &mut Vec<Acao>) {
-    ui.horizontal(|ui| {
-        let mut done = task.done;
-        if ui.checkbox(&mut done, "").changed() {
+    // Topo: caixa e lixeira alinhadas à primeira linha de um texto quebrado.
+    ui.horizontal_top(|ui| {
+        if caixa(ui, task.done).clicked() {
             acoes.push(Acao::Alternar(task.id));
         }
 
@@ -701,6 +704,35 @@ fn linha(ui: &mut egui::Ui, task: &Task, editando: &mut Option<Edicao>, acoes: &
     });
 }
 
+/// Caixa de concluir no estilo do tema: contorno discreto, ✓ verde quando
+/// feita. Focável pelo Tab; Espaço/Enter contam como clique.
+fn caixa(ui: &mut egui::Ui, feita: bool) -> egui::Response {
+    let tamanho = Vec2::splat(ui.spacing().interact_size.y);
+    let (r, resp) = ui.allocate_exact_size(tamanho, Sense::CLICK | Sense::FOCUSABLE);
+    let quadro = Rect::from_center_size(r.center(), Vec2::splat(12.0));
+    let borda = if resp.has_focus() || resp.hovered() {
+        cor::AZUL
+    } else if feita {
+        cor::CINZA
+    } else {
+        cor::TEXTO_FRACO
+    };
+    let p = ui.painter();
+    p.rect_stroke(quadro, 2, Stroke::new(1.0, borda), egui::StrokeKind::Inside);
+    if feita {
+        let c = quadro.center();
+        p.line(
+            vec![
+                pos2(c.x - 3.5, c.y),
+                pos2(c.x - 1.0, c.y + 2.5),
+                pos2(c.x + 3.5, c.y - 2.5),
+            ],
+            Stroke::new(1.5, cor::VERDE),
+        );
+    }
+    resp
+}
+
 /// Lixeira desenhada com o painter (o glifo 🗑 não existe nas fontes padrão
 /// do egui). Invisível, só reserva o espaço (sem desenho nem dica). Devolve `true`
 /// no clique quando visível.
@@ -715,7 +747,7 @@ fn botao_lixeira(ui: &mut egui::Ui, visivel: bool) -> bool {
     }
     let resp = resp.on_hover_text("Apagar");
     let cor = if resp.hovered() {
-        ui.visuals().strong_text_color()
+        cor::VERMELHO
     } else {
         ui.visuals().weak_text_color()
     };
@@ -788,10 +820,12 @@ impl eframe::App for OverlayApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let janela = ui.max_rect();
 
+        let alfa = self.ajustes.config.alfa();
         egui::Frame::new()
-            .fill(Color32::from_black_alpha(self.ajustes.config.alfa()))
-            .corner_radius(8)
-            .inner_margin(8)
+            .fill(tema::fundo(alfa))
+            .stroke(Stroke::new(1.0, cor::LINHA.gamma_multiply_u8(alfa)))
+            .corner_radius(6)
+            .inner_margin(10)
             .show(ui, |ui| {
                 ui.set_min_size(ui.available_size());
                 let aberta = self.ajustes.aberta;
@@ -839,20 +873,28 @@ fn barra_titulo(ui: &mut egui::Ui, pendentes: usize, config_aberta: bool) -> Opt
         ui.ctx().send_viewport_cmd(ViewportCommand::StartDrag);
     }
 
+    let fonte = FontId::proportional(14.0);
     let titulo = if config_aberta {
-        "Configurações".to_owned()
-    } else if pendentes == 0 {
-        "Tarefas".to_owned()
+        "configurações"
     } else {
-        format!("Tarefas ({pendentes})")
+        "tarefas"
     };
-    ui.painter().text(
+    let escrito = ui.painter().text(
         barra.left_center(),
         Align2::LEFT_CENTER,
         titulo,
-        FontId::proportional(14.0),
-        ui.visuals().strong_text_color(),
+        fonte.clone(),
+        cor::TEXTO,
     );
+    if !config_aberta && pendentes > 0 {
+        ui.painter().text(
+            escrito.right_center() + vec2(8.0, 0.0),
+            Align2::LEFT_CENTER,
+            pendentes.to_string(),
+            fonte,
+            cor::AZUL,
+        );
+    }
 
     let botao = Rect::from_min_size(
         barra.right_top() - vec2(ALTURA_BARRA, 0.0),
@@ -861,13 +903,13 @@ fn barra_titulo(ui: &mut egui::Ui, pendentes: usize, config_aberta: bool) -> Opt
     let fechar = ui
         .interact(botao, Id::unique("fechar"), Sense::CLICK)
         .on_hover_text("Esconder");
-    let cor = if fechar.hovered() {
-        ui.visuals().strong_text_color()
+    let cor_x = if fechar.hovered() {
+        cor::VERMELHO
     } else {
         ui.visuals().weak_text_color()
     };
-    let x = botao.shrink(7.0);
-    let traco = Stroke::new(1.5, cor);
+    let x = botao.shrink(8.0);
+    let traco = Stroke::new(1.5, cor_x);
     ui.painter()
         .line_segment([x.left_top(), x.right_bottom()], traco);
     ui.painter()
@@ -897,7 +939,7 @@ fn barra_titulo(ui: &mut egui::Ui, pendentes: usize, config_aberta: bool) -> Opt
 /// Engrenagem de ~14 px desenhada com o painter (sem depender de glifo).
 fn desenhar_engrenagem(ui: &egui::Ui, c: Pos2, destaque: bool) {
     let cor = if destaque {
-        ui.visuals().strong_text_color()
+        cor::AZUL
     } else {
         ui.visuals().weak_text_color()
     };
