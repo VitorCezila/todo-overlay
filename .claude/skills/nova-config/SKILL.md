@@ -21,10 +21,10 @@ Para qualquer preferência do usuário que deva sobreviver a reinícios: opacida
    - atalho → `hotkey.rs` (desregistrar o antigo, registrar o novo; se falhar, manter o antigo e avisar);
    - autostart → `autostart.rs`.
 4. **Controle na UI** de configurações em `app.rs` (slider, checkbox, campo de texto). Aplicar ao vivo quando barato.
-5. **Persistir** chamando o save de `config.json` só quando o valor muda (não a cada frame).
+5. **Persistir** chamando `config::salvar` para o `config.json` só quando o valor muda (não a cada frame).
 6. **Testes** em `config.rs`: (a) JSON sem o campo carrega com o padrão; (b) valor fora da faixa é corrigido; (c) roundtrip serializa/desserializa.
 7. Validar: `cargo fmt; cargo clippy --all-targets -- -D warnings; cargo test` e `cargo run`.
-8. Commit: `feat: permite configurar <opção>` (sem atribuição ao Claude).
+8. Commit: `feat: permite configurar <opção>`.
 
 ## Convenções deste projeto
 - Campo novo **nunca** quebra config antigo → sempre `serde(default)`. Renomear/remover campo é mudança de formato → use `migrar-dados`.

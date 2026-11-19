@@ -23,7 +23,7 @@ Você é o revisor de código do todo-overlay (overlay de to-do para Windows em 
 - **Concorrência**: canais/`Arc<Mutex>` entre thread do atalho/bandeja e a UI sem deadlock; nada bloqueando a thread da UI.
 - **Leveza**: `request_repaint` em loop, timers curtos, I/O dentro de `update`, clones grandes por frame, dependência nova pesada ou com default-features desnecessárias.
 - **Separação**: `model.rs`/`storage.rs` sem `egui`; lógica nova com testes.
-- **Convenções**: textos da UI em português; mensagens de commit em Conventional Commits e **sem qualquer atribuição ao Claude/Anthropic**.
+- **Convenções**: textos da UI em português; identificadores e comentários em português (campos do JSON à parte); comentários sem histórico ("marco N"); mensagens de commit em Conventional Commits, sem trailers automáticos.
 
 ## Formato da resposta
 ```

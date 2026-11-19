@@ -1,5 +1,11 @@
 # todo-overlay
 
+[![ci](https://github.com/VitorCezila/todo-overlay/actions/workflows/ci.yml/badge.svg)](https://github.com/VitorCezila/todo-overlay/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/VitorCezila/todo-overlay)](https://github.com/VitorCezila/todo-overlay/releases/latest)
+[![licença](https://img.shields.io/github/license/VitorCezila/todo-overlay)](LICENSE)
+
+🇧🇷 Português · [🇺🇸 English](README.en.md)
+
 Uma to-do list que fica no cantinho da tela, sempre à vista e sem atrapalhar.
 
 O todo-overlay é uma janela pequena, semitransparente e sempre no topo para você bater o olho no que falta fazer sem trocar de janela. Um atalho (`Ctrl+Alt+T`) mostra e esconde a lista de qualquer lugar. Feito em Rust para ser **leve de verdade**: um único `.exe` de ~5 MB, sem instalador, sem conta, sem internet.
@@ -44,6 +50,26 @@ Medido na v0.5.0 (Windows 11, RTX 3050):
 | CPU parado | 0% |
 | RAM | ~65 MB (a maior parte é do driver OpenGL da placa de vídeo) |
 
+Sobre a RAM: o código do app gasta poucos MB; quase todo o resto é do driver OpenGL da NVIDIA (`nvoglv64.dll`), que entra em qualquer programa que desenhe com a GPU por OpenGL. Em outras placas de vídeo o número muda.
+
+## Por que não...
+
+- **Notas Autoadesivas (Sticky Notes)**: são notas de texto solto, não uma lista para concluir tarefas, e não têm atalho global para mostrar/esconder.
+- **Microsoft To Do + "Sempre visível" do PowerToys**: funciona, mas é uma janela inteira (com borda, conta Microsoft e sincronização) para o que aqui é um cantinho translúcido.
+- **Widgets do Rainmeter**: exigem instalar o Rainmeter e editar skins; o todo-overlay é um `.exe` só.
+
+Se você já usa uma dessas e está satisfeito, ótimo. Este é para quem quer só uma lista leve, local e sempre à vista.
+
+## Como foi feito
+
+O projeto foi desenvolvido com o [Claude Code](https://claude.com/claude-code) (IA da Anthropic) como par de programação, com o autor definindo requisitos, revisando e testando cada mudança. O processo está versionado no repositório:
+
+- [`CLAUDE.md`](CLAUDE.md): requisitos, metas de leveza, convenções e as restrições técnicas descobertas pelo caminho (eframe com a janela escondida, `WM_ENDSESSION`, AltGr no teclado ABNT2...).
+- [`.claude/skills/`](.claude/skills): passo a passo para tarefas recorrentes (nova feature, nova configuração, migração de dados, release).
+- [`.claude/agents/`](.claude/agents): revisores especializados (código, desempenho, testes) usados antes de cada PR.
+
+Cada mudança passou por branch, PR, `fmt`/`clippy`/testes e revisão. O CI repete essas checagens.
+
 ## Para desenvolvedores
 
 Feito com [Rust](https://www.rust-lang.org) e [egui](https://github.com/emilk/egui) (backend OpenGL), mais `global-hotkey` e `tray-icon`.
@@ -56,6 +82,8 @@ cargo build --release                       # target\release\todo-overlay.exe
 cargo fmt --check; cargo clippy --all-targets -- -D warnings; cargo test
 ```
 
+O código fica em `src/`: `model.rs` e `storage.rs` têm a lógica pura (sem UI, com testes), `app.rs` a interface e `hotkey.rs` a thread de fundo com atalho, bandeja e Win32. Identificadores e comentários estão em português. Issues e PRs são bem-vindos; o CI (`.github/workflows/ci.yml`) roda as mesmas checagens em cada PR.
+
 ### Release
 
 O `.exe` publicado é compilado pelo GitHub Actions (`.github/workflows/release.yml`). Para lançar uma versão, suba a `version` do `Cargo.toml` e envie uma tag anotada com as notas da versão:
@@ -64,7 +92,7 @@ O `.exe` publicado é compilado pelo GitHub Actions (`.github/workflows/release.
 git tag -a v0.6.0 --cleanup=verbatim -F notas.md; git push origin v0.6.0
 ```
 
-O CI roda fmt/clippy/testes, confere se a tag bate com o `Cargo.toml`, compila e publica a release com o `.exe`.
+O workflow de release roda fmt/clippy/testes, confere se a tag bate com o `Cargo.toml`, compila e publica a release com o `.exe`.
 
 ## Licença
 
