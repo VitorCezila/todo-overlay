@@ -1,0 +1,56 @@
+# CI: em cada push para main e em cada PR, valida formatação, lint e testes
+# e confere se o .exe de release continua dentro das metas de leveza.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# Um push novo no mesmo PR cancela a execução anterior.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  validar:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Instalar Rust
+        run: |
+          rustup toolchain install stable --profile minimal -c clippy,rustfmt
+          rustup default stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: fmt
+        run: cargo fmt --check
+      - name: clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: test
+        run: cargo test
+
+      - name: Build de release
+        run: cargo build --release
+
+      - name: Conferir o .exe
+        run: |
+          $exe = "target\release\todo-overlay.exe"
+          $mb = (Get-Item $exe).Length / 1MB
+          "todo-overlay.exe: {0:N2} MB" -f $mb >> $env:GITHUB_STEP_SUMMARY
+          if ($mb -ge 10) { Write-Error ("exe com {0:N2} MB (meta: < 10 MB)" -f $mb) }
+          # Runtime C deve estar embutido (.cargo/config.toml): sem VCRUNTIME140.dll.
+          if (Select-String -Path $exe -Pattern 'vcruntime140.dll' -SimpleMatch -Quiet) {
+            Write-Error "o .exe depende de VCRUNTIME140.dll"
+          }

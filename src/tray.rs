@@ -1,4 +1,4 @@
-//! Ícone na bandeja: Mostrar/Esconder, Configurações, Sair. Marco 3.
+//! Ícone na bandeja: Mostrar/Esconder, Configurações, Sair.
 //!
 //! Criado na thread de fundo de `hotkey` (o `tray-icon` precisa de uma thread
 //! com loop de mensagens Win32). Os handlers só mexem na janela via

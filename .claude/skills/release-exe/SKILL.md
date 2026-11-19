@@ -1,12 +1,12 @@
 ---
 name: release-exe
-description: Use ao fechar um marco do roadmap ou quando o usuário pedir "gera o exe"/"faz uma release" do todo-overlay — compila em release, mede tamanho e RAM ociosa contra as metas, cria tag e GitHub Release.
+description: Use quando houver mudanças acumuladas em main que valem uma versão ou quando o usuário pedir "gera o exe"/"faz uma release" do todo-overlay — compila em release, mede tamanho e RAM ociosa contra as metas, cria tag e GitHub Release.
 ---
 
 # Release do .exe
 
 ## Quando usar
-Ao concluir um marco do roadmap, ou quando o usuário quiser instalar a versão nova no próprio PC.
+Quando há mudanças em main que valem uma versão, ou quando o usuário quiser instalar a versão nova no próprio PC.
 
 ## Passo a passo
 1. Estar em `main` limpa e atualizada: `git switch main; git pull; git status`.
@@ -14,7 +14,7 @@ Ao concluir um marco do roadmap, ou quando o usuário quiser instalar a versão 
    ```powershell
    cargo fmt --check; cargo clippy --all-targets -- -D warnings; cargo test
    ```
-3. **Versão**: atualizar `version` em `Cargo.toml` (SemVer: `0.x.0` para marcos do MVP, `0.x.y` para correções).
+3. **Versão**: atualizar `version` em `Cargo.toml` (SemVer: `0.x.0` para funcionalidades novas, `0.x.y` só para correções).
 4. **Build**: `cargo build --release` (o perfil release já tem `lto`, `codegen-units = 1`, `strip`, `panic = "abort"`).
 5. **Medir** e comparar com as metas do CLAUDE.md:
    ```powershell
@@ -43,7 +43,7 @@ Ao concluir um marco do roadmap, ou quando o usuário quiser instalar a versão 
 
 ## Convenções deste projeto
 - Notas da release em português, listando features/fixes desde a última tag (`git log <ultima-tag>..HEAD --oneline`) e as medições.
-- Nenhuma menção/atribuição ao Claude em commit, tag ou release.
+- Sem trailers automáticos em commit, tag ou release.
 
 ## Checklist final
 - [ ] fmt/clippy/test ok

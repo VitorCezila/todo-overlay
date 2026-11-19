@@ -19,18 +19,18 @@ use anyhow::Context;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::model::TaskList;
+use crate::model::ListaTarefas;
 
 /// Versão atual do formato de `tasks.json`.
-pub const CURRENT_VERSION: u64 = 1;
+pub const VERSAO_ATUAL: u64 = 1;
 
 const NOME_APP: &str = "todo-overlay";
 const NOME_ARQUIVO: &str = "tasks.json";
 
-/// Resultado de [`load`].
+/// Resultado de [`carregar`].
 #[derive(Debug, Default)]
 pub struct Carregado {
-    pub list: TaskList,
+    pub lista: ListaTarefas,
     /// Mensagem para mostrar ao usuário (backup feito, versão futura...).
     pub aviso: Option<String>,
     /// `true` quando o arquivo não deve ser sobrescrito (versão futura).
@@ -41,7 +41,7 @@ pub struct Carregado {
 struct Arquivo<'a> {
     version: u64,
     #[serde(flatten)]
-    list: &'a TaskList,
+    lista: &'a ListaTarefas,
 }
 
 /// `%APPDATA%\todo-overlay\tasks.json`.
@@ -58,7 +58,7 @@ pub(crate) fn caminho_no_appdata(nome: &str) -> anyhow::Result<PathBuf> {
 
 /// Carrega a lista. Arquivo inexistente → lista vazia. Só devolve `Err` em
 /// falha real de I/O (ex.: permissão), sem mexer no arquivo.
-pub fn load(path: &Path) -> anyhow::Result<Carregado> {
+pub fn carregar(path: &Path) -> anyhow::Result<Carregado> {
     let bytes = match fs::read(path) {
         Ok(b) => b,
         Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Carregado::default()),
@@ -72,12 +72,12 @@ pub fn load(path: &Path) -> anyhow::Result<Carregado> {
         return corrompido(path);
     };
 
-    if versao > CURRENT_VERSION {
+    if versao > VERSAO_ATUAL {
         // Gerado por uma versão mais nova do app: lê o que der, nunca grava.
-        let mut list = serde_json::from_value::<TaskList>(valor).unwrap_or_default();
-        list.normalizar();
+        let mut lista = serde_json::from_value::<ListaTarefas>(valor).unwrap_or_default();
+        lista.normalizar();
         return Ok(Carregado {
-            list,
+            lista,
             aviso: Some(format!(
                 "tasks.json é de uma versão mais nova (v{versao}); alterações não serão salvas"
             )),
@@ -86,11 +86,11 @@ pub fn load(path: &Path) -> anyhow::Result<Carregado> {
     }
 
     let valor = migrar(valor, versao);
-    match serde_json::from_value::<TaskList>(valor) {
-        Ok(mut list) => {
-            list.normalizar();
+    match serde_json::from_value::<ListaTarefas>(valor) {
+        Ok(mut lista) => {
+            lista.normalizar();
             Ok(Carregado {
-                list,
+                lista,
                 ..Default::default()
             })
         }
@@ -99,10 +99,10 @@ pub fn load(path: &Path) -> anyhow::Result<Carregado> {
 }
 
 /// Grava de forma atômica: `*.tmp` + `sync_all` + rename por cima.
-pub fn save(path: &Path, list: &TaskList) -> anyhow::Result<()> {
+pub fn salvar(path: &Path, lista: &ListaTarefas) -> anyhow::Result<()> {
     let json = serde_json::to_vec_pretty(&Arquivo {
-        version: CURRENT_VERSION,
-        list,
+        version: VERSAO_ATUAL,
+        lista,
     })
     .context("falha ao serializar as tarefas")?;
     gravar_atomico(path, &json)
@@ -137,7 +137,7 @@ pub(crate) fn versao_de(valor: &Value) -> Option<u64> {
     }
 }
 
-/// Aplica as migrações em cadeia de `versao` até [`CURRENT_VERSION`].
+/// Aplica as migrações em cadeia de `versao` até [`VERSAO_ATUAL`].
 /// Ainda não há nenhuma: v1 é o primeiro formato.
 fn migrar(valor: Value, _versao: u64) -> Value {
     valor
@@ -207,12 +207,12 @@ mod tests {
         (dir, path)
     }
 
-    fn lista(textos: &[&str]) -> TaskList {
-        let mut list = TaskList::default();
+    fn lista(textos: &[&str]) -> ListaTarefas {
+        let mut lista = ListaTarefas::default();
         for t in textos {
-            list.add(t).unwrap();
+            lista.adicionar(t).unwrap();
         }
-        list
+        lista
     }
 
     /// Nomes dos arquivos dentro do diretório, ordenados.
@@ -233,8 +233,8 @@ mod tests {
     fn assert_vira_bak(conteudo: &[u8]) {
         let (dir, path) = tmp();
         fs::write(&path, conteudo).unwrap();
-        let c = load(&path).unwrap();
-        assert!(c.list.tasks.is_empty());
+        let c = carregar(&path).unwrap();
+        assert!(c.lista.tasks.is_empty());
         assert!(c.aviso.is_some(), "deveria avisar o usuário");
         assert!(!c.somente_leitura);
         assert!(!path.exists(), "original deveria ter sido movido");
@@ -245,30 +245,30 @@ mod tests {
     #[test]
     fn salvar_e_carregar_ida_e_volta() {
         let (_dir, path) = tmp();
-        let mut list = lista(&["Reunião às 15h ✅", "Café ☕", "Terceira"]);
-        let id = list.tasks[1].id;
-        list.toggle(id);
-        save(&path, &list).unwrap();
+        let mut lista = lista(&["Reunião às 15h ✅", "Café ☕", "Terceira"]);
+        let id = lista.tasks[1].id;
+        lista.alternar(id);
+        salvar(&path, &lista).unwrap();
 
-        let c = load(&path).unwrap();
-        assert_eq!(c.list, list);
+        let c = carregar(&path).unwrap();
+        assert_eq!(c.lista, lista);
         assert!(c.aviso.is_none());
         assert!(!c.somente_leitura);
-        let textos: Vec<_> = c.list.tasks.iter().map(|t| t.text.as_str()).collect();
+        let textos: Vec<_> = c.lista.tasks.iter().map(|t| t.text.as_str()).collect();
         assert_eq!(textos, ["Reunião às 15h ✅", "Café ☕", "Terceira"]);
-        let feitas: Vec<_> = c.list.tasks.iter().map(|t| t.done).collect();
+        let feitas: Vec<_> = c.lista.tasks.iter().map(|t| t.done).collect();
         assert_eq!(feitas, [false, true, false]);
     }
 
     #[test]
     fn ida_e_volta_preserva_next_id() {
         let (_dir, path) = tmp();
-        let mut list = lista(&["a", "b", "c"]);
-        let ultimo = list.tasks[2].id;
-        assert!(list.take(ultimo).is_some());
-        save(&path, &list).unwrap();
-        let mut c = load(&path).unwrap();
-        let novo = c.list.add("d").unwrap();
+        let mut lista = lista(&["a", "b", "c"]);
+        let ultimo = lista.tasks[2].id;
+        assert!(lista.tirar(ultimo).is_some());
+        salvar(&path, &lista).unwrap();
+        let mut c = carregar(&path).unwrap();
+        let novo = c.lista.adicionar("d").unwrap();
         assert!(
             novo > ultimo,
             "id {novo} reutilizaria o id apagado {ultimo}"
@@ -278,9 +278,9 @@ mod tests {
     #[test]
     fn json_gravado_tem_versao_atual() {
         let (_dir, path) = tmp();
-        save(&path, &lista(&["a"])).unwrap();
+        salvar(&path, &lista(&["a"])).unwrap();
         let v: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        assert_eq!(v["version"], CURRENT_VERSION);
+        assert_eq!(v["version"], VERSAO_ATUAL);
         assert_eq!(v["version"], 1);
         assert!(v["tasks"].is_array());
     }
@@ -288,7 +288,7 @@ mod tests {
     #[test]
     fn json_gravado_mantem_unicode_legivel() {
         let (_dir, path) = tmp();
-        save(&path, &lista(&["Reunião às 15h ✅"])).unwrap();
+        salvar(&path, &lista(&["Reunião às 15h ✅"])).unwrap();
         let s = fs::read_to_string(&path).unwrap();
         assert!(s.contains("Reunião às 15h ✅"));
     }
@@ -296,8 +296,8 @@ mod tests {
     #[test]
     fn arquivo_ausente_vira_lista_vazia_sem_criar_nada() {
         let (dir, path) = tmp();
-        let c = load(&path).unwrap();
-        assert!(c.list.tasks.is_empty());
+        let c = carregar(&path).unwrap();
+        assert!(c.lista.tasks.is_empty());
         assert!(c.aviso.is_none());
         assert!(!c.somente_leitura);
         assert!(!path.exists());
@@ -308,8 +308,8 @@ mod tests {
     fn arquivo_ausente_em_pasta_ausente_nao_cria_pasta() {
         let (dir, _) = tmp();
         let path = dir.path().join("nao").join("existe").join(NOME_ARQUIVO);
-        let c = load(&path).unwrap();
-        assert!(c.list.tasks.is_empty());
+        let c = carregar(&path).unwrap();
+        assert!(c.lista.tasks.is_empty());
         assert!(!dir.path().join("nao").exists());
     }
 
@@ -365,11 +365,11 @@ mod tests {
         let segundo = b"segundo corrompido [".as_slice();
 
         fs::write(&path, primeiro).unwrap();
-        load(&path).unwrap();
+        carregar(&path).unwrap();
         fs::write(&path, segundo).unwrap();
-        let c = load(&path).unwrap();
+        let c = carregar(&path).unwrap();
 
-        assert!(c.list.tasks.is_empty());
+        assert!(c.lista.tasks.is_empty());
         assert!(!path.exists());
         assert_eq!(fs::read(bak(&path)).unwrap(), primeiro);
 
@@ -387,7 +387,7 @@ mod tests {
         let conteudos: Vec<Vec<u8>> = (0..4).map(|i| format!("lixo {i}").into_bytes()).collect();
         for c in &conteudos {
             fs::write(&path, c).unwrap();
-            load(&path).unwrap();
+            carregar(&path).unwrap();
         }
         let nomes = arquivos(&dir);
         assert_eq!(nomes.len(), 4, "{nomes:?}");
@@ -407,14 +407,14 @@ mod tests {
             r#"{"tasks":[{"id":3,"text":"Reunião","done":true},{"id":7,"text":"b","done":false}]}"#,
         )
         .unwrap();
-        let mut c = load(&path).unwrap();
+        let mut c = carregar(&path).unwrap();
         assert!(c.aviso.is_none());
         assert!(!c.somente_leitura);
-        assert_eq!(c.list.tasks.len(), 2);
-        assert_eq!(c.list.tasks[0].text, "Reunião");
-        assert!(c.list.tasks[0].done);
+        assert_eq!(c.lista.tasks.len(), 2);
+        assert_eq!(c.lista.tasks[0].text, "Reunião");
+        assert!(c.lista.tasks[0].done);
         // sem next_id: normalizar evita repetir ids
-        assert_eq!(c.list.add("novo"), Some(8));
+        assert_eq!(c.lista.adicionar("novo"), Some(8));
         assert!(path.exists(), "carregar não deve mover o arquivo");
     }
 
@@ -423,14 +423,14 @@ mod tests {
         let (dir, path) = tmp();
         let conteudo = format!(
             r#"{{"version":{},"tasks":[{{"id":1,"text":"do futuro","done":false}}],"campo_novo":true}}"#,
-            CURRENT_VERSION + 1
+            VERSAO_ATUAL + 1
         );
         fs::write(&path, &conteudo).unwrap();
-        let c = load(&path).unwrap();
+        let c = carregar(&path).unwrap();
         assert!(c.somente_leitura);
         assert!(c.aviso.is_some());
-        assert_eq!(c.list.tasks.len(), 1);
-        assert_eq!(c.list.tasks[0].text, "do futuro");
+        assert_eq!(c.lista.tasks.len(), 1);
+        assert_eq!(c.lista.tasks[0].text, "do futuro");
         assert_eq!(fs::read(&path).unwrap(), conteudo.as_bytes());
         assert_eq!(arquivos(&dir), ["tasks.json"], "não deve criar .bak");
     }
@@ -440,10 +440,10 @@ mod tests {
         let (dir, path) = tmp();
         let conteudo = br#"{"version": 99, "itens": {"formato": "novo"}}"#;
         fs::write(&path, conteudo).unwrap();
-        let c = load(&path).unwrap();
+        let c = carregar(&path).unwrap();
         assert!(c.somente_leitura);
         assert!(c.aviso.is_some());
-        assert!(c.list.tasks.is_empty());
+        assert!(c.lista.tasks.is_empty());
         assert_eq!(fs::read(&path).unwrap(), conteudo);
         assert_eq!(arquivos(&dir), ["tasks.json"]);
     }
@@ -451,8 +451,8 @@ mod tests {
     #[test]
     fn salvar_nao_deixa_tmp() {
         let (dir, path) = tmp();
-        save(&path, &lista(&["a"])).unwrap();
-        save(&path, &lista(&["a", "b"])).unwrap();
+        salvar(&path, &lista(&["a"])).unwrap();
+        salvar(&path, &lista(&["a", "b"])).unwrap();
         assert!(!com_sufixo(&path, ".tmp").exists());
         assert_eq!(arquivos(&dir), ["tasks.json"]);
     }
@@ -460,19 +460,19 @@ mod tests {
     #[test]
     fn salvar_sobrescreve_arquivo_existente() {
         let (_dir, path) = tmp();
-        save(&path, &lista(&["velha 1", "velha 2", "velha 3"])).unwrap();
-        save(&path, &lista(&["nova"])).unwrap();
-        let c = load(&path).unwrap();
-        assert_eq!(c.list.tasks.len(), 1);
-        assert_eq!(c.list.tasks[0].text, "nova");
+        salvar(&path, &lista(&["velha 1", "velha 2", "velha 3"])).unwrap();
+        salvar(&path, &lista(&["nova"])).unwrap();
+        let c = carregar(&path).unwrap();
+        assert_eq!(c.lista.tasks.len(), 1);
+        assert_eq!(c.lista.tasks[0].text, "nova");
     }
 
     #[test]
     fn salvar_cria_diretorios_intermediarios() {
         let (dir, _) = tmp();
         let path = dir.path().join("a").join("b").join("c").join(NOME_ARQUIVO);
-        save(&path, &lista(&["x"])).unwrap();
-        assert_eq!(load(&path).unwrap().list.tasks[0].text, "x");
+        salvar(&path, &lista(&["x"])).unwrap();
+        assert_eq!(carregar(&path).unwrap().lista.tasks[0].text, "x");
     }
 
     #[test]
@@ -484,20 +484,20 @@ mod tests {
             "lixo de um crash anterior, bem maior que o novo conteúdo",
         )
         .unwrap();
-        save(&path, &lista(&["ok"])).unwrap();
+        salvar(&path, &lista(&["ok"])).unwrap();
         assert!(!tmp_antigo.exists());
         assert_eq!(arquivos(&dir), ["tasks.json"]);
-        let c = load(&path).unwrap();
+        let c = carregar(&path).unwrap();
         assert!(c.aviso.is_none());
-        assert_eq!(c.list.tasks[0].text, "ok");
+        assert_eq!(c.lista.tasks[0].text, "ok");
     }
 
     #[test]
     fn salvar_lista_vazia_carrega_vazia() {
         let (_dir, path) = tmp();
-        save(&path, &TaskList::default()).unwrap();
-        let c = load(&path).unwrap();
-        assert!(c.list.tasks.is_empty());
+        salvar(&path, &ListaTarefas::default()).unwrap();
+        let c = carregar(&path).unwrap();
+        assert!(c.lista.tasks.is_empty());
         assert!(c.aviso.is_none());
     }
 
@@ -516,7 +516,7 @@ mod tests {
     fn fixture_v1_carrega_todas_as_tarefas() {
         let (_dir, path) = tmp();
         fs::write(&path, include_str!("../tests/fixtures/tasks_v1.json")).unwrap();
-        let mut c = load(&path).unwrap();
+        let mut c = carregar(&path).unwrap();
         assert!(c.aviso.is_none());
         assert!(!c.somente_leitura);
 
@@ -527,27 +527,27 @@ mod tests {
             (5, "Ligar para o médico 📞", false),
         ];
         let obtido: Vec<_> = c
-            .list
+            .lista
             .tasks
             .iter()
             .map(|t| (t.id, t.text.as_str(), t.done))
             .collect();
         assert_eq!(obtido, esperado);
-        assert_eq!(c.list.add("nova"), Some(7), "next_id da fixture é 6");
+        assert_eq!(c.lista.adicionar("nova"), Some(7), "next_id da fixture é 6");
     }
 
     #[test]
     fn fixture_v1_ida_e_volta_mantem_dados() {
         let (_dir, path) = tmp();
         fs::write(&path, include_str!("../tests/fixtures/tasks_v1.json")).unwrap();
-        let original = load(&path).unwrap().list;
-        save(&path, &original).unwrap();
-        assert_eq!(load(&path).unwrap().list, original);
+        let original = carregar(&path).unwrap().lista;
+        salvar(&path, &original).unwrap();
+        assert_eq!(carregar(&path).unwrap().lista, original);
     }
 
     #[test]
     fn array_com_formato_de_struct_vira_bak() {
-        // serde aceita structs como sequência: `[[]]` vira TaskList vazia
+        // serde aceita structs como sequência: `[[]]` vira ListaTarefas vazia
         // silenciosamente em vez de ir para o .bak.
         assert_vira_bak(b"[[]]");
     }

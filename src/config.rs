@@ -1,4 +1,4 @@
-//! Configurações do usuário em `%APPDATA%\todo-overlay\config.json`. Marco 4.
+//! Configurações do usuário em `%APPDATA%\todo-overlay\config.json`.
 //!
 //! Formato: `{"version": 1, "hotkey": "Ctrl+Alt+T", "opacity": 0.8}`.
 //! Mesmas regras do `tasks.json` (ver `storage`): gravação atômica, arquivo
@@ -23,7 +23,7 @@ use serde_json::Value;
 use crate::storage;
 
 /// Versão atual do formato de `config.json`.
-pub const CURRENT_VERSION: u64 = 1;
+pub const VERSAO_ATUAL: u64 = 1;
 
 const NOME_ARQUIVO: &str = "config.json";
 
@@ -60,7 +60,7 @@ struct Arquivo<'a> {
     config: &'a Config,
 }
 
-/// Resultado de [`load`].
+/// Resultado de [`carregar`].
 #[derive(Debug, Default)]
 pub struct Carregado {
     pub config: Config,
@@ -238,7 +238,7 @@ pub fn caminho_padrao() -> anyhow::Result<PathBuf> {
 
 /// Carrega as configurações. Arquivo inexistente → padrão. Só devolve `Err`
 /// em falha real de I/O (ex.: permissão), sem mexer no arquivo.
-pub fn load(path: &Path) -> anyhow::Result<Carregado> {
+pub fn carregar(path: &Path) -> anyhow::Result<Carregado> {
     let bytes = match fs::read(path) {
         Ok(b) => b,
         Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Carregado::default()),
@@ -252,7 +252,7 @@ pub fn load(path: &Path) -> anyhow::Result<Carregado> {
         return corrompido(path);
     };
 
-    if versao > CURRENT_VERSION {
+    if versao > VERSAO_ATUAL {
         // De uma versão mais nova do app: usa o que der, nunca grava.
         let mut config = serde_json::from_value::<Config>(valor).unwrap_or_default();
         config.normalizar();
@@ -279,9 +279,9 @@ pub fn load(path: &Path) -> anyhow::Result<Carregado> {
 }
 
 /// Grava de forma atômica (`*.tmp` + rename).
-pub fn save(path: &Path, config: &Config) -> anyhow::Result<()> {
+pub fn salvar(path: &Path, config: &Config) -> anyhow::Result<()> {
     let json = serde_json::to_vec_pretty(&Arquivo {
-        version: CURRENT_VERSION,
+        version: VERSAO_ATUAL,
         config,
     })
     .context("falha ao serializar as configurações")?;
@@ -321,14 +321,14 @@ mod tests {
     fn carregar_texto(conteudo: &str) -> (TempDir, PathBuf, Carregado) {
         let (dir, path) = tmp();
         fs::write(&path, conteudo).unwrap();
-        let c = load(&path).unwrap();
+        let c = carregar(&path).unwrap();
         (dir, path, c)
     }
 
     #[test]
     fn arquivo_ausente_usa_padrao_sem_criar_nada() {
         let (dir, path) = tmp();
-        let c = load(&path).unwrap();
+        let c = carregar(&path).unwrap();
         assert_eq!(c.config, Config::default());
         assert!(c.aviso.is_none());
         assert!(!c.somente_leitura);
@@ -392,19 +392,19 @@ mod tests {
             hotkey: "Ctrl+Shift+F5".into(),
             opacity: 0.35,
         };
-        save(&path, &config).unwrap();
-        let c = load(&path).unwrap();
+        salvar(&path, &config).unwrap();
+        let c = carregar(&path).unwrap();
         assert_eq!(c.config, config);
         assert!(c.aviso.is_none());
         let v: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        assert_eq!(v["version"], CURRENT_VERSION);
+        assert_eq!(v["version"], VERSAO_ATUAL);
     }
 
     #[test]
     fn salvar_nao_deixa_tmp() {
         let (dir, path) = tmp();
-        save(&path, &Config::default()).unwrap();
-        save(&path, &Config::default()).unwrap();
+        salvar(&path, &Config::default()).unwrap();
+        salvar(&path, &Config::default()).unwrap();
         assert_eq!(nomes(&dir), [NOME_ARQUIVO]);
     }
 
@@ -434,7 +434,7 @@ mod tests {
     fn versao_futura_fica_somente_leitura_e_intacta() {
         let conteudo = format!(
             r#"{{"version": {}, "opacity": 0.4, "novo": true}}"#,
-            CURRENT_VERSION + 1
+            VERSAO_ATUAL + 1
         );
         let (dir, path, c) = carregar_texto(&conteudo);
         assert!(c.somente_leitura);

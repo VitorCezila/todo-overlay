@@ -9,7 +9,7 @@ description: Use ao começar qualquer item do roadmap ou melhoria do todo-overla
 Sempre que for implementar algo novo ou corrigir um bug que mereça branch própria. Para adicionar só uma opção de configuração, prefira `nova-config`; para mudar o formato do JSON salvo, siga também `migrar-dados`.
 
 ## Passo a passo
-1. **Entender o escopo**: identificar qual marco do roadmap (CLAUDE.md) a feature cobre e quais módulos de `src/` serão tocados. Se houver ambiguidade de comportamento visível ao usuário, pergunte antes.
+1. **Entender o escopo**: entender o que a feature muda para o usuário e quais módulos de `src/` serão tocados. Se houver ambiguidade de comportamento visível ao usuário, pergunte antes.
 2. **Branch** a partir de `main` atualizada:
    ```powershell
    git switch main; git pull; git switch -c feat/<nome-curto>
@@ -30,12 +30,12 @@ Sempre que for implementar algo novo ou corrigir um bug que mereça branch próp
    ```powershell
    git add -A; git commit -m "feat: adiciona atalho global para mostrar/esconder"
    ```
-   **Sem** `Co-Authored-By`, sem "Generated with Claude Code", sem qualquer menção ao Claude/Anthropic.
+   Sem trailers automáticos (`Co-Authored-By`, "Generated with ..."): o uso do Claude Code já está declarado no README.
 10. **PR** (só se o usuário pedir push/PR):
     ```powershell
     git push -u origin HEAD; gh pr create --fill --base main
     ```
-    Corpo do PR: o que mudou, como testar manualmente. Sem rodapé de atribuição.
+    Corpo do PR: o que mudou, como testar manualmente. Sem rodapé automático. O PR é mesclado com squash merge (`gh pr merge --squash`).
 11. Se a feature mudou comandos, estrutura ou convenções, atualize o `CLAUDE.md` no mesmo PR.
 
 ## Convenções deste projeto
@@ -47,5 +47,5 @@ Sempre que for implementar algo novo ou corrigir um bug que mereça branch próp
 - [ ] `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` e `cargo test` passam
 - [ ] Testado com `cargo run`
 - [ ] Sem `unwrap` em I/O, sem `request_repaint` em loop
-- [ ] Commit/PR sem qualquer atribuição ao Claude
+- [ ] Commit/PR sem trailers automáticos
 - [ ] `CLAUDE.md` atualizado se necessário
