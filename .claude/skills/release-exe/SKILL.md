@@ -26,15 +26,12 @@ Ao concluir um marco do roadmap, ou quando o usuário quiser instalar a versão 
    ```
    Se alguma meta estourar, **pare** e acione o agent `perf-auditor` antes de lançar.
 6. **Smoke test manual** do `.exe` de release: abre transparente e no topo, atalho mostra/esconde, bandeja funciona, tarefas persistem após fechar/abrir.
-7. **Commit e tag**:
+7. **Commit** da versão (via PR, como qualquer mudança) e, depois do merge, **tag anotada na `main`**. A mensagem da tag vira as notas da release:
    ```powershell
-   git commit -am "chore: release v0.x.0"; git tag v0.x.0
+   git switch main; git pull
+   git tag -a v0.x.0 -F <arquivo-com-as-notas.md>
    ```
-8. **GitHub Release** (só se o usuário pedir push):
-   ```powershell
-   git push; git push --tags
-   gh release create v0.x.0 target\release\todo-overlay.exe --title "v0.x.0" --notes "<o que mudou + medições de tamanho/RAM>"
-   ```
+8. **GitHub Release pelo CI** (só se o usuário pedir push): `git push origin v0.x.0`. O workflow `.github/workflows/release.yml` roda fmt/clippy/test, confere tag = `Cargo.toml`, compila, barra `.exe` ≥ 10 MB ou dependente de `VCRUNTIME140.dll` e publica a release com o `.exe`, o tamanho e o SHA-256. Acompanhe com `gh run watch`. Não publique com `gh release create` local: o `.exe` oficial é o do CI.
 9. Atualizar a instalação local: pedir ao usuário para fechar o app pelo "Sair" da bandeja (não usar `Stop-Process`: pode perder uma edição em andamento) e então:
    ```powershell
    $dest = "$env:LOCALAPPDATA\Programs\todo-overlay"
