@@ -24,13 +24,14 @@ todo-overlay/
    ├─ app.rs           # janela overlay + UI da lista (egui)
    ├─ model.rs         # Task / TaskList — lógica pura, SEM dependência de UI, com testes
    ├─ storage.rs       # load/save de tasks.json com gravação atômica + migrações
-   ├─ config.rs        # Config (atalho, opacidade, autostart)
+   ├─ config.rs        # Config (atalho, opacidade) em config.json, com testes
    ├─ hotkey.rs        # registro do atalho global (thread própria)
    ├─ tray.rs          # ícone na bandeja: Mostrar/Esconder, Configurações, Sair
    └─ autostart.rs     # HKCU\Software\Microsoft\Windows\CurrentVersion\Run
 ```
 
-Dados do usuário: `%APPDATA%\todo-overlay\tasks.json` e `%APPDATA%\todo-overlay\config.json`.
+Dados do usuário: `%APPDATA%\todo-overlay\tasks.json` e `%APPDATA%\todo-overlay\config.json` (mesmas regras: gravação atômica, corrompido → `.bak`, versão futura → somente leitura).
+"Iniciar com o Windows" não fica no `config.json`: a fonte da verdade é o valor `todo-overlay` na chave `Run` do registro.
 Posição/tamanho da janela: salvos pelo próprio eframe (`persist_window`) em `%APPDATA%\todo-overlay\data\app.ron`.
 
 ## Comandos
@@ -71,7 +72,7 @@ Antes de qualquer commit: `cargo fmt --check; cargo clippy --all-targets -- -D w
 4. Iniciar com o Windows + tela de configurações (opacidade, atalho).
 5. Build de release, ícone, medição de consumo.
 
-Riscos conhecidos: com a janela invisível o eframe para de chamar `update`, então o atalho global deve ser tratado numa thread própria que mostra/esconde a janela via Win32 (`ShowWindow`) e depois chama `ctx.request_repaint()`. No eframe 0.37, `App::logic` roda mesmo com a janela escondida (passo só de lógica após `request_repaint`): é lá que X/Alt+F4 viram "esconder" (`CancelClose`), e o "Sair" da bandeja liga a flag `saindo` + `ViewportCommand::Close`, o que mantém o `on_exit` funcionando. Atalho e bandeja vivem numa única thread com `GetMessageW` (`hotkey.rs`), encerrada no `Drop` de `Fundo` para não deixar ícone fantasma. O winit não trata `WM_ENDSESSION` (logoff/desligamento mata o processo sem `on_exit`): uma janela top-level oculta `todo-overlay-sessao` nessa mesma thread recebe a mensagem, pede a gravação à UI (`hotkey::Encerramento`, atendido em `App::logic` → `gravar_pendencias`) e espera a confirmação por até 3 s. Overlay não aparece sobre jogos em tela cheia exclusiva.
+Riscos conhecidos: com a janela invisível o eframe para de chamar `update`, então o atalho global deve ser tratado numa thread própria que mostra/esconde a janela via Win32 (`ShowWindow`) e depois chama `ctx.request_repaint()`. No eframe 0.37, `App::logic` roda mesmo com a janela escondida (passo só de lógica após `request_repaint`): é lá que X/Alt+F4 viram "esconder" (`CancelClose`), e o "Sair" da bandeja liga a flag `saindo` + `ViewportCommand::Close`, o que mantém o `on_exit` funcionando. Atalho e bandeja vivem numa única thread com `GetMessageW` (`hotkey.rs`), encerrada no `Drop` de `Fundo` para não deixar ícone fantasma. O winit não trata `WM_ENDSESSION` (logoff/desligamento mata o processo sem `on_exit`): uma janela top-level oculta `todo-overlay-sessao` nessa mesma thread recebe a mensagem, pede a gravação à UI (`hotkey::Encerramento`, atendido em `App::logic` → `gravar_pendencias`) e espera a confirmação por até 3 s. Trocar o atalho (tela de configurações): o `RegisterHotKey` tem que rodar na thread do `GlobalHotKeyManager`, então a UI só posta `WM_APP_ATALHO` para a janela `todo-overlay-sessao` (não `PostThreadMessageW`, que se perde com o menu da bandeja aberto) e lê a resposta em `App::logic`, sem bloquear; o novo é registrado antes de soltar o antigo. Combinação já registrada por outro programa é interceptada pelo Windows e nem chega à captura do egui. A captura usa `physical_key` (no ABNT2, Ctrl+Alt+Q chega como "/" na tecla lógica, por ser AltGr) e `config::recusa` barra combinações que quebrariam o Windows (Shift+letra, Alt+F4, Ctrl+C, AltGr do ABNT2...). Overlay não aparece sobre jogos em tela cheia exclusiva.
 
 ## Skills e agents do projeto
 

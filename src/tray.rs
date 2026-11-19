@@ -25,10 +25,10 @@ pub fn criar(
     janela: Janela,
     ctx: egui::Context,
     saindo: Arc<AtomicBool>,
+    abrir_config: Arc<AtomicBool>,
 ) -> anyhow::Result<TrayIcon> {
     let alternar = MenuItem::with_id(ID_ALTERNAR, "Mostrar/Esconder", true, None);
-    // Tela de configurações é do marco 4.
-    let config = MenuItem::with_id(ID_CONFIG, "Configurações", false, None);
+    let config = MenuItem::with_id(ID_CONFIG, "Configurações", true, None);
     let sair = MenuItem::with_id(ID_SAIR, "Sair", true, None);
     let menu = Menu::with_items(&[&alternar, &config, &PredefinedMenuItem::separator(), &sair])
         .context("falha ao montar o menu")?;
@@ -38,6 +38,11 @@ pub fn criar(
     let ctx_menu = ctx.clone();
     MenuEvent::set_event_handler(Some(move |ev: MenuEvent| match ev.id.0.as_str() {
         ID_ALTERNAR => janela.alternar(&ctx_menu),
+        ID_CONFIG => {
+            // `logic` vê a flag e troca para a tela de configurações.
+            abrir_config.store(true, Ordering::SeqCst);
+            janela.mostrar(&ctx_menu);
+        }
         ID_SAIR => {
             // `logic` deixa este Close passar (não cancela) e o eframe roda
             // `on_exit`, inclusive com a janela escondida.

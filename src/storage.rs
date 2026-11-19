@@ -46,9 +46,14 @@ struct Arquivo<'a> {
 
 /// `%APPDATA%\todo-overlay\tasks.json`.
 pub fn caminho_padrao() -> anyhow::Result<PathBuf> {
+    caminho_no_appdata(NOME_ARQUIVO)
+}
+
+/// `%APPDATA%\todo-overlay\<nome>`.
+pub(crate) fn caminho_no_appdata(nome: &str) -> anyhow::Result<PathBuf> {
     let base =
         directories::BaseDirs::new().context("não foi possível localizar a pasta %APPDATA%")?;
-    Ok(base.config_dir().join(NOME_APP).join(NOME_ARQUIVO))
+    Ok(base.config_dir().join(NOME_APP).join(nome))
 }
 
 /// Carrega a lista. Arquivo inexistente → lista vazia. Só devolve `Err` em
@@ -95,21 +100,26 @@ pub fn load(path: &Path) -> anyhow::Result<Carregado> {
 
 /// Grava de forma atômica: `*.tmp` + `sync_all` + rename por cima.
 pub fn save(path: &Path, list: &TaskList) -> anyhow::Result<()> {
-    if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir)
-            .with_context(|| format!("falha ao criar a pasta {}", dir.display()))?;
-    }
     let json = serde_json::to_vec_pretty(&Arquivo {
         version: CURRENT_VERSION,
         list,
     })
     .context("falha ao serializar as tarefas")?;
+    gravar_atomico(path, &json)
+}
 
+/// Cria a pasta se preciso, grava `*.tmp`, faz `sync_all` e renomeia por cima.
+/// Também usado pelo `config`.
+pub(crate) fn gravar_atomico(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir)
+            .with_context(|| format!("falha ao criar a pasta {}", dir.display()))?;
+    }
     let tmp = com_sufixo(path, ".tmp");
     {
         let mut f =
             fs::File::create(&tmp).with_context(|| format!("falha ao criar {}", tmp.display()))?;
-        f.write_all(&json)
+        f.write_all(bytes)
             .and_then(|()| f.sync_all())
             .with_context(|| format!("falha ao gravar {}", tmp.display()))?;
     }
@@ -120,7 +130,7 @@ pub fn save(path: &Path, list: &TaskList) -> anyhow::Result<()> {
 /// `version` do arquivo; ausente → 1. Presente mas não numérico → `None`.
 /// Raiz que não é objeto → `None` (o serde aceitaria struct como array, e um
 /// `[[]]` viraria lista vazia gravada por cima do arquivo).
-fn versao_de(valor: &Value) -> Option<u64> {
+pub(crate) fn versao_de(valor: &Value) -> Option<u64> {
     match valor.as_object()?.get("version") {
         None => Some(1),
         Some(v) => v.as_u64(),
@@ -135,6 +145,18 @@ fn migrar(valor: Value, _versao: u64) -> Value {
 
 /// Move o arquivo ilegível para um `.bak` e começa com a lista vazia.
 fn corrompido(path: &Path) -> anyhow::Result<Carregado> {
+    let nome = mover_para_backup(path)?;
+    Ok(Carregado {
+        aviso: Some(format!(
+            "tasks.json estava corrompido; cópia salva em {nome}"
+        )),
+        ..Default::default()
+    })
+}
+
+/// Renomeia o arquivo para o primeiro `.bak` livre e devolve o nome do
+/// backup (para o aviso). Também usado pelo `config`.
+pub(crate) fn mover_para_backup(path: &Path) -> anyhow::Result<String> {
     let bak = caminho_backup(path);
     fs::rename(path, &bak).with_context(|| {
         format!(
@@ -143,16 +165,10 @@ fn corrompido(path: &Path) -> anyhow::Result<Carregado> {
             bak.display()
         )
     })?;
-    let nome = bak.file_name().map_or_else(
+    Ok(bak.file_name().map_or_else(
         || bak.display().to_string(),
         |n| n.to_string_lossy().into_owned(),
-    );
-    Ok(Carregado {
-        aviso: Some(format!(
-            "tasks.json estava corrompido; cópia salva em {nome}"
-        )),
-        ..Default::default()
-    })
+    ))
 }
 
 /// Primeiro nome livre entre `tasks.json.bak`, `tasks.json.<ts>.bak`,
