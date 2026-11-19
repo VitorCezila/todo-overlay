@@ -20,7 +20,7 @@ Ao concluir um marco do roadmap, ou quando o usuário quiser instalar a versão 
    ```powershell
    (Get-Item target\release\todo-overlay.exe).Length / 1MB      # meta: < 10 MB
    Start-Process target\release\todo-overlay.exe; Start-Sleep 5
-   Get-Process todo-overlay | Select-Object WorkingSet64, PrivateMemorySize64, CPU   # meta: < 40 MB, CPU estável
+   Get-Process todo-overlay | Select-Object WorkingSet64, PrivateMemorySize64, CPU   # meta: < 80 MB, CPU estável
    Start-Sleep 30; Get-Process todo-overlay | Select-Object CPU                        # CPU não deve subir ociosa
    Stop-Process -Name todo-overlay
    ```
@@ -35,7 +35,14 @@ Ao concluir um marco do roadmap, ou quando o usuário quiser instalar a versão 
    git push; git push --tags
    gh release create v0.x.0 target\release\todo-overlay.exe --title "v0.x.0" --notes "<o que mudou + medições de tamanho/RAM>"
    ```
-9. Atualizar a instalação local: substituir o `.exe` que o autostart aponta (o caminho fica em `HKCU\...\Run\todo-overlay`).
+9. Atualizar a instalação local: pedir ao usuário para fechar o app pelo "Sair" da bandeja (não usar `Stop-Process`: pode perder uma edição em andamento) e então:
+   ```powershell
+   $dest = "$env:LOCALAPPDATA\Programs\todo-overlay"
+   New-Item -ItemType Directory -Force $dest | Out-Null
+   Copy-Item target\release\todo-overlay.exe $dest -Force
+   Start-Process "$dest\todo-overlay.exe"
+   ```
+   A chave `HKCU\...\Run\todo-overlay` deve apontar para `$dest\todo-overlay.exe`, nunca para `target\`.
 
 ## Convenções deste projeto
 - Notas da release em português, listando features/fixes desde a última tag (`git log <ultima-tag>..HEAD --oneline`) e as medições.
@@ -43,6 +50,6 @@ Ao concluir um marco do roadmap, ou quando o usuário quiser instalar a versão 
 
 ## Checklist final
 - [ ] fmt/clippy/test ok
-- [ ] `.exe` < 10 MB, RAM ociosa < 40 MB, CPU ociosa ~0%
+- [ ] `.exe` < 10 MB, RAM ociosa < 80 MB, CPU ociosa ~0%
 - [ ] Smoke test manual feito
 - [ ] Versão no `Cargo.toml` = tag

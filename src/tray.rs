@@ -18,8 +18,8 @@ const ID_ALTERNAR: &str = "alternar";
 const ID_CONFIG: &str = "config";
 const ID_SAIR: &str = "sair";
 
-/// Lado do ícone provisório (o `.ico` de verdade chega no marco 5).
-const LADO_ICONE: u32 = 32;
+/// Id do `assets/icon.ico` embutido pelo `build.rs` (`winresource` usa 1).
+const ID_RECURSO_ICONE: u16 = 1;
 
 pub fn criar(
     janela: Janela,
@@ -33,7 +33,9 @@ pub fn criar(
     let menu = Menu::with_items(&[&alternar, &config, &PredefinedMenuItem::separator(), &sair])
         .context("falha ao montar o menu")?;
 
-    let icone = Icon::from_rgba(icone_rgba(), LADO_ICONE, LADO_ICONE).context("ícone inválido")?;
+    // Tamanho padrão do sistema; o Windows escolhe a melhor imagem do .ico.
+    let icone = Icon::from_resource(ID_RECURSO_ICONE, None)
+        .context("ícone não encontrado nos recursos do .exe")?;
 
     let ctx_menu = ctx.clone();
     MenuEvent::set_event_handler(Some(move |ev: MenuEvent| match ev.id.0.as_str() {
@@ -71,66 +73,4 @@ pub fn criar(
         .with_menu_on_left_click(false)
         .build()
         .context("falha ao criar o ícone")
-}
-
-/// Ícone provisório: quadrado arredondado azul com um ✓ branco, RGBA.
-fn icone_rgba() -> Vec<u8> {
-    let n = LADO_ICONE as usize;
-    let lado = LADO_ICONE as f32;
-    let raio = lado * 0.22;
-    // Traço do ✓ em coordenadas do ícone.
-    let (a, b, c) = (
-        (lado * 0.26, lado * 0.52),
-        (lado * 0.43, lado * 0.69),
-        (lado * 0.75, lado * 0.33),
-    );
-    let espessura = lado * 0.09;
-
-    let mut px = Vec::with_capacity(n * n * 4);
-    for y in 0..n {
-        for x in 0..n {
-            let p = (x as f32 + 0.5, y as f32 + 0.5);
-            let rgba = if !dentro_arredondado(p, lado, raio) {
-                [0, 0, 0, 0]
-            } else if dist_segmento(p, a, b).min(dist_segmento(p, b, c)) <= espessura {
-                [255, 255, 255, 255]
-            } else {
-                [52, 120, 220, 255]
-            };
-            px.extend_from_slice(&rgba);
-        }
-    }
-    px
-}
-
-fn dentro_arredondado((x, y): (f32, f32), lado: f32, raio: f32) -> bool {
-    let cx = x.clamp(raio, lado - raio);
-    let cy = y.clamp(raio, lado - raio);
-    (x - cx).powi(2) + (y - cy).powi(2) <= raio * raio
-}
-
-fn dist_segmento(p: (f32, f32), a: (f32, f32), b: (f32, f32)) -> f32 {
-    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
-    let t = (((p.0 - a.0) * dx + (p.1 - a.1) * dy) / (dx * dx + dy * dy)).clamp(0.0, 1.0);
-    let (qx, qy) = (a.0 + t * dx, a.1 + t * dy);
-    ((p.0 - qx).powi(2) + (p.1 - qy).powi(2)).sqrt()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn icone_tem_tamanho_rgba_certo() {
-        assert_eq!(icone_rgba().len(), (LADO_ICONE * LADO_ICONE * 4) as usize);
-    }
-
-    #[test]
-    fn icone_tem_cantos_transparentes_e_centro_opaco() {
-        let px = icone_rgba();
-        let alfa = |x: u32, y: u32| px[((y * LADO_ICONE + x) * 4 + 3) as usize];
-        assert_eq!(alfa(0, 0), 0);
-        assert_eq!(alfa(LADO_ICONE - 1, LADO_ICONE - 1), 0);
-        assert_eq!(alfa(LADO_ICONE / 2, LADO_ICONE / 2), 255);
-    }
 }
