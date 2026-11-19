@@ -71,7 +71,7 @@ Antes de qualquer commit: `cargo fmt --check; cargo clippy --all-targets -- -D w
 4. Iniciar com o Windows + tela de configurações (opacidade, atalho).
 5. Build de release, ícone, medição de consumo.
 
-Riscos conhecidos: com a janela invisível o eframe para de chamar `update`, então o atalho global deve ser tratado numa thread própria que mostra/esconde a janela via Win32 (`ShowWindow`) e depois chama `ctx.request_repaint()`. Overlay não aparece sobre jogos em tela cheia exclusiva.
+Riscos conhecidos: com a janela invisível o eframe para de chamar `update`, então o atalho global deve ser tratado numa thread própria que mostra/esconde a janela via Win32 (`ShowWindow`) e depois chama `ctx.request_repaint()`. No eframe 0.37, `App::logic` roda mesmo com a janela escondida (passo só de lógica após `request_repaint`): é lá que X/Alt+F4 viram "esconder" (`CancelClose`), e o "Sair" da bandeja liga a flag `saindo` + `ViewportCommand::Close`, o que mantém o `on_exit` funcionando. Atalho e bandeja vivem numa única thread com `GetMessageW` (`hotkey.rs`), encerrada no `Drop` de `Fundo` para não deixar ícone fantasma. Overlay não aparece sobre jogos em tela cheia exclusiva.
 
 ## Skills e agents do projeto
 
