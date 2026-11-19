@@ -18,6 +18,8 @@ Overlay de to-do list para Windows: uma janelinha semitransparente, sem borda, s
 todo-overlay/
 ├─ Cargo.toml
 ├─ build.rs            # embute assets/icon.ico no .exe (se existir)
+├─ .cargo/config.toml  # +crt-static: runtime C dentro do .exe (sem VC++ Redistributable)
+├─ .github/workflows/release.yml  # tag vX.Y.Z → valida, compila e publica a GitHub Release
 ├─ assets/             # icon.ico (gerado por gerar_icone.py; a bandeja o lê do recurso 1 do .exe)
 └─ src/
    ├─ main.rs          # ponto de entrada; #![windows_subsystem = "windows"] (sem console)

@@ -1,0 +1,74 @@
+# Release: ao enviar uma tag anotada vX.Y.Z, valida, compila o .exe no
+# Windows e publica a GitHub Release. As notas são a mensagem da tag
+# (escrita em português, com as medições de RAM/CPU feitas localmente);
+# o CI acrescenta o tamanho e o SHA-256 do .exe.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      # O checkout de uma tag pode trocá-la por uma tag leve; busca a anotada.
+      - name: Buscar a tag anotada
+        run: git fetch --force origin "refs/tags/${env:GITHUB_REF_NAME}:refs/tags/${env:GITHUB_REF_NAME}"
+
+      - name: Instalar Rust
+        run: |
+          rustup toolchain install stable --profile minimal -c clippy,rustfmt
+          rustup default stable
+
+      - name: Conferir versão do Cargo.toml = tag
+        run: |
+          $versao = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          if ("v$versao" -ne $env:GITHUB_REF_NAME) {
+            Write-Error "Cargo.toml está em $versao, mas a tag é $env:GITHUB_REF_NAME"
+          }
+
+      - name: fmt
+        run: cargo fmt --check
+      - name: clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: test
+        run: cargo test
+
+      - name: Build de release
+        run: cargo build --release
+
+      - name: Conferir o .exe
+        run: |
+          $exe = "target\release\todo-overlay.exe"
+          $mb = (Get-Item $exe).Length / 1MB
+          if ($mb -ge 10) { Write-Error ("exe com {0:N2} MB (meta: < 10 MB)" -f $mb) }
+          # Runtime C deve estar embutido (.cargo/config.toml): sem VCRUNTIME140.dll.
+          if (Select-String -Path $exe -Pattern 'vcruntime140.dll' -SimpleMatch -Quiet) {
+            Write-Error "o .exe depende de VCRUNTIME140.dll"
+          }
+
+      - name: Publicar a release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Lê a saída do git como UTF-8 (senão os acentos das notas quebram).
+          [Console]::OutputEncoding = [Text.UTF8Encoding]::new()
+          $tag = $env:GITHUB_REF_NAME
+          $exe = "target\release\todo-overlay.exe"
+          $mb = "{0:N2}" -f ((Get-Item $exe).Length / 1MB)
+          $sha = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
+          $notas = (git tag -l --format='%(contents)' $tag) -join "`n"
+          $notas += "`n`n---`n``todo-overlay.exe``: $mb MB · SHA-256 ``$sha``"
+          Set-Content notas.md $notas -Encoding utf8
+          gh release create $tag $exe --title $tag --notes-file notas.md
