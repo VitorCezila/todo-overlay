@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "tasks": [
+    {
+      "id": 1,
+      "text": "Reunião às 15h ✅",
+      "done": false
+    },
+    {
+      "id": 2,
+      "text": "Comprar pão e café",
+      "done": true
+    },
+    {
+      "id": 4,
+      "text": "Revisar relatório de manutenção",
+      "done": false
+    },
+    {
+      "id": 5,
+      "text": "Ligar para o médico 📞",
+      "done": false
+    }
+  ],
+  "next_id": 6
+}
