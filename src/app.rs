@@ -7,8 +7,12 @@
 //! Marco 2: lista de tarefas — Enter no campo adiciona, duplo clique edita,
 //! checkbox conclui, 🗑 (no hover) apaga. Grava `tasks.json` só quando a
 //! lista muda (ver `storage`).
+//! Marco 3: `Ctrl+Alt+T` (`hotkey`) e o ícone da bandeja (`tray`) mostram/escondem;
+//! o X e o Alt+F4 só escondem — sair é pela bandeja (ver `logic`).
 
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use eframe::egui::{
     self, Align, Align2, Button, Color32, CursorIcon, FontId, Id, Key, Label, Layout,
@@ -16,6 +20,9 @@ use eframe::egui::{
     Vec2, ViewportCommand, pos2, vec2,
 };
 
+use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+use crate::hotkey::{self, Fundo, Janela};
 use crate::model::{Task, TaskList};
 use crate::storage;
 
@@ -52,9 +59,16 @@ pub fn run() -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    let app = OverlayApp::carregar();
-    eframe::run_native(NOME_APP, options, Box::new(move |_cc| Ok(Box::new(app))))
-        .map_err(|e| anyhow::anyhow!("falha ao abrir a janela: {e}"))
+    let mut app = OverlayApp::carregar();
+    eframe::run_native(
+        NOME_APP,
+        options,
+        Box::new(move |cc| {
+            app.iniciar_fundo(cc);
+            Ok(Box::new(app))
+        }),
+    )
+    .map_err(|e| anyhow::anyhow!("falha ao abrir a janela: {e}"))
 }
 
 /// Área de trabalho do monitor principal (sem a taskbar) em pontos lógicos:
@@ -112,6 +126,14 @@ struct OverlayApp {
     /// O carregamento falhou por I/O (ex.: arquivo travado pelo OneDrive):
     /// oferecer "Tentar de novo" em vez de travar a sessão.
     pode_recarregar: bool,
+    /// Janela principal (Win32), para esconder pelo X/Alt+F4.
+    janela: Option<Janela>,
+    /// Ligado pelo "Sair" da bandeja: deixa o próximo pedido de fechar passar.
+    saindo: Arc<AtomicBool>,
+    /// Thread do atalho + bandeja; o Drop (depois de `on_exit`) a encerra.
+    fundo: Option<Fundo>,
+    /// Avisos do atalho/bandeja (sobrevivem ao "Tentar de novo").
+    aviso_fundo: Option<String>,
 }
 
 struct Edicao {
@@ -138,6 +160,10 @@ impl OverlayApp {
             mensagem: None,
             pendente_salvar: false,
             pode_recarregar: false,
+            janela: None,
+            saindo: Arc::new(AtomicBool::new(false)),
+            fundo: None,
+            aviso_fundo: None,
         };
         match storage::caminho_padrao() {
             Ok(caminho) => {
@@ -159,6 +185,49 @@ impl OverlayApp {
             Err(e) => app.mensagem = Some(format!("Tarefas não serão salvas: {e:#}")),
         }
         app
+    }
+
+    /// Sobe a thread do atalho e da bandeja, que precisam do HWND e do contexto.
+    fn iniciar_fundo(&mut self, cc: &eframe::CreationContext<'_>) {
+        let hwnd = match cc.window_handle().map(|h| h.as_raw()) {
+            Ok(RawWindowHandle::Win32(h)) => h.hwnd.get(),
+            _ => {
+                self.aviso_fundo = Some("Atalho e bandeja indisponíveis (janela sem HWND).".into());
+                return;
+            }
+        };
+        let janela = Janela(hwnd);
+        let fundo = hotkey::iniciar(janela, cc.egui_ctx.clone(), self.saindo.clone());
+        if !fundo.avisos.is_empty() {
+            self.aviso_fundo = Some(fundo.avisos.join("\n"));
+        }
+        self.janela = Some(janela);
+        self.fundo = Some(fundo);
+    }
+
+    /// Recarrega `tasks.json` sem perder a janela, a bandeja e o atalho.
+    fn recarregar(&mut self) {
+        let mut novo = Self::carregar();
+        novo.janela = self.janela;
+        novo.saindo = self.saindo.clone();
+        novo.fundo = self.fundo.take();
+        novo.aviso_fundo = self.aviso_fundo.take();
+        *self = novo;
+    }
+
+    /// Só dá para esconder em vez de fechar se a bandeja existe (é por ela
+    /// que se reabre e se sai).
+    fn pode_esconder(&self) -> bool {
+        self.janela.is_some() && self.fundo.as_ref().is_some_and(|f| f.bandeja)
+    }
+
+    /// X da barra: esconde; sem bandeja, fecha de verdade (senão o app
+    /// ficaria invisível sem como voltar nem sair).
+    fn esconder_ou_fechar(&self, ctx: &egui::Context) {
+        match self.janela {
+            Some(j) if self.pode_esconder() => j.esconder(),
+            _ => ctx.send_viewport_cmd(ViewportCommand::Close),
+        }
     }
 
     fn salvar(&mut self) {
@@ -197,11 +266,11 @@ impl OverlayApp {
         let mut mudou = false;
         let editavel = self.editavel();
 
-        if let Some(msg) = &self.mensagem {
+        for msg in [&self.aviso_fundo, &self.mensagem].into_iter().flatten() {
             ui.colored_label(ui.visuals().warn_fg_color, msg);
         }
         if self.pode_recarregar && ui.button("Tentar de novo").clicked() {
-            *self = Self::carregar();
+            self.recarregar();
             return;
         }
 
@@ -316,6 +385,20 @@ fn linha(ui: &mut egui::Ui, task: &Task, editando: &mut Option<Edicao>, acoes: &
 }
 
 impl eframe::App for OverlayApp {
+    /// Roda também com a janela escondida (o eframe faz um passo só de lógica
+    /// quando alguém chama `request_repaint`), por isso o Sair da bandeja
+    /// funciona sem mostrar a janela.
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let fechar = ctx.input(|i| i.viewport().close_requested());
+        if fechar && !self.saindo.load(Ordering::SeqCst) && self.pode_esconder() {
+            // Alt+F4 (ou outro pedido do sistema): só esconde. Sair é pela bandeja.
+            ctx.send_viewport_cmd(ViewportCommand::CancelClose);
+            if let Some(j) = self.janela {
+                j.esconder();
+            }
+        }
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let janela = ui.max_rect();
 
@@ -325,7 +408,9 @@ impl eframe::App for OverlayApp {
             .inner_margin(8)
             .show(ui, |ui| {
                 ui.set_min_size(ui.available_size());
-                barra_titulo(ui, self.lista.pending_count());
+                if barra_titulo(ui, self.lista.pending_count()) {
+                    self.esconder_ou_fechar(ui.ctx());
+                }
                 ui.separator();
                 self.conteudo(ui);
             });
@@ -335,7 +420,7 @@ impl eframe::App for OverlayApp {
     }
 
     /// Última chance para uma gravação que falhou (ex.: arquivo travado por
-    /// antivírus) e para uma edição em andamento fechada com Alt+F4.
+    /// antivírus) e para uma edição em andamento ao sair pela bandeja.
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         if let Some(ed) = self.editando.take() {
             self.pendente_salvar |= self.lista.edit(ed.id, &ed.texto);
@@ -350,8 +435,8 @@ impl eframe::App for OverlayApp {
     }
 }
 
-/// Barra própria: arrastar move a janela; o botão fecha o app.
-fn barra_titulo(ui: &mut egui::Ui, pendentes: usize) {
+/// Barra própria: arrastar move a janela. Devolve `true` se o X foi clicado.
+fn barra_titulo(ui: &mut egui::Ui, pendentes: usize) -> bool {
     let (barra, arrasto) =
         ui.allocate_exact_size(vec2(ui.available_width(), ALTURA_BARRA), Sense::drag());
     if arrasto.drag_started_by(PointerButton::Primary) {
@@ -377,7 +462,7 @@ fn barra_titulo(ui: &mut egui::Ui, pendentes: usize) {
     );
     let fechar = ui
         .interact(botao, Id::unique("fechar"), Sense::click())
-        .on_hover_text("Fechar");
+        .on_hover_text("Esconder");
     let cor = if fechar.hovered() {
         ui.visuals().strong_text_color()
     } else {
@@ -389,10 +474,7 @@ fn barra_titulo(ui: &mut egui::Ui, pendentes: usize) {
         .line_segment([x.left_top(), x.right_bottom()], traco);
     ui.painter()
         .line_segment([x.right_top(), x.left_bottom()], traco);
-    if fechar.clicked() {
-        // TODO(marco 3): com a bandeja, esconder em vez de encerrar o processo.
-        ui.ctx().send_viewport_cmd(ViewportCommand::Close);
-    }
+    fechar.clicked()
 }
 
 /// Alças invisíveis nas 4 bordas e 4 cantos (a janela sem borda não tem resize nativo).

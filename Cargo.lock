@@ -2145,6 +2145,7 @@ dependencies = [
  "directories",
  "eframe",
  "global-hotkey",
+ "raw-window-handle",
  "serde",
  "serde_json",
  "tempfile",
