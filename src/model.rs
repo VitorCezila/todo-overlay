@@ -64,11 +64,23 @@ impl TaskList {
         }
     }
 
-    /// Apaga a tarefa. Devolve `false` se o id não existe.
-    pub fn remove(&mut self, id: u64) -> bool {
-        let antes = self.tasks.len();
-        self.tasks.retain(|t| t.id != id);
-        self.tasks.len() != antes
+    /// Apaga a tarefa (`None` se o id não existe) e devolve a posição que ela
+    /// ocupava, para poder ser devolvida com [`TaskList::restore`] ("Desfazer").
+    pub fn take(&mut self, id: u64) -> Option<(usize, Task)> {
+        let pos = self.tasks.iter().position(|t| t.id == id)?;
+        Some((pos, self.tasks.remove(pos)))
+    }
+
+    /// Devolve uma tarefa tirada por [`TaskList::take`] na posição `pos`
+    /// (ou no fim, se a lista encolheu). Recusa se o id já existe. `next_id`
+    /// não muda: ele nunca diminui, então o id restaurado não será reutilizado.
+    pub fn restore(&mut self, pos: usize, task: Task) -> bool {
+        if self.tasks.iter().any(|t| t.id == task.id) {
+            return false;
+        }
+        let pos = pos.min(self.tasks.len());
+        self.tasks.insert(pos, task);
+        true
     }
 
     pub fn pending_count(&self) -> usize {
@@ -120,7 +132,7 @@ mod tests {
         let b = list.add("b").unwrap();
         assert!(list.toggle(a));
         assert_eq!(list.pending_count(), 1);
-        assert!(list.remove(b));
+        assert!(list.take(b).is_some());
         assert_eq!(list.tasks.len(), 1);
         assert!(list.tasks[0].done);
     }
@@ -151,7 +163,7 @@ mod tests {
     #[test]
     fn ids_nao_sao_reutilizados_apos_apagar() {
         let (mut list, ids) = lista_com(&["a", "b"]);
-        assert!(list.remove(ids[1]));
+        assert!(list.take(ids[1]).is_some());
         let c = list.add("c").unwrap();
         assert!(!ids.contains(&c));
     }
@@ -219,18 +231,88 @@ mod tests {
     #[test]
     fn apagar_id_inexistente_devolve_false() {
         let (mut list, ids) = lista_com(&["a"]);
-        assert!(!list.remove(ids[0] + 1));
+        assert!(list.take(ids[0] + 1).is_none());
         assert_eq!(list.tasks.len(), 1);
-        assert!(list.remove(ids[0]));
-        assert!(!list.remove(ids[0]), "apagar duas vezes devolve false");
+        assert!(list.take(ids[0]).is_some());
+        assert!(
+            list.take(ids[0]).is_none(),
+            "apagar duas vezes devolve None"
+        );
     }
 
     #[test]
     fn apagar_do_meio_preserva_ordem() {
         let (mut list, ids) = lista_com(&["a", "b", "c"]);
-        assert!(list.remove(ids[1]));
+        assert!(list.take(ids[1]).is_some());
         let textos: Vec<_> = list.tasks.iter().map(|t| t.text.as_str()).collect();
         assert_eq!(textos, ["a", "c"]);
+    }
+
+    fn textos(list: &TaskList) -> Vec<&str> {
+        list.tasks.iter().map(|t| t.text.as_str()).collect()
+    }
+
+    #[test]
+    fn tirar_e_restaurar_volta_a_mesma_ordem() {
+        let (mut list, ids) = lista_com(&["a", "b", "c"]);
+        list.toggle(ids[1]);
+        let antes = list.clone();
+        let (pos, task) = list.take(ids[1]).unwrap();
+        assert_eq!(pos, 1);
+        assert_eq!(textos(&list), ["a", "c"]);
+        assert!(list.restore(pos, task));
+        assert_eq!(list, antes, "restaura texto, done e posição");
+    }
+
+    #[test]
+    fn tirar_id_inexistente_devolve_none() {
+        let (mut list, ids) = lista_com(&["a"]);
+        assert_eq!(list.take(ids[0] + 1), None);
+        assert_eq!(list.tasks.len(), 1);
+    }
+
+    #[test]
+    fn restaurar_alem_do_fim_insere_no_fim() {
+        let (mut list, ids) = lista_com(&["a", "b", "c"]);
+        let (pos, task) = list.take(ids[2]).unwrap();
+        assert!(list.take(ids[1]).is_some());
+        assert!(list.restore(pos, task));
+        assert_eq!(textos(&list), ["a", "c"]);
+    }
+
+    #[test]
+    fn restaurar_id_existente_e_recusado() {
+        let (mut list, ids) = lista_com(&["a"]);
+        let copia = list.tasks[0].clone();
+        let antes = list.clone();
+        assert!(!list.restore(0, copia));
+        assert_eq!(list, antes);
+        assert!(list.take(ids[0]).is_some());
+    }
+
+    #[test]
+    fn adicionar_depois_de_restaurar_nao_repete_id() {
+        let (mut list, ids) = lista_com(&["a", "b"]);
+        let (pos, task) = list.take(ids[1]).unwrap();
+        assert!(list.restore(pos, task));
+        let novo = list.add("c").unwrap();
+        assert!(!ids.contains(&novo));
+    }
+
+    #[test]
+    fn restaurar_varias_em_ordem_inversa_recompoe_a_lista() {
+        let (mut list, ids) = lista_com(&["a", "b", "c", "d"]);
+        let antes = list.clone();
+        // Apagar em sequência, como num duplo clique que pega a linha de baixo.
+        let mut pilha = Vec::new();
+        for id in [ids[1], ids[2], ids[0]] {
+            pilha.push(list.take(id).unwrap());
+        }
+        assert_eq!(textos(&list), ["d"]);
+        while let Some((pos, task)) = pilha.pop() {
+            assert!(list.restore(pos, task));
+        }
+        assert_eq!(list, antes);
     }
 
     #[test]
@@ -282,7 +364,7 @@ mod tests {
         assert_eq!(ids, [1, 2]);
         assert_eq!(list.tasks[1].text, "b");
         assert!(list.tasks[1].done);
-        assert!(list.remove(1));
+        assert!(list.take(1).is_some());
         assert_eq!(
             list.tasks.len(),
             1,

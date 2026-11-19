@@ -249,7 +249,7 @@ mod tests {
         let (_dir, path) = tmp();
         let mut list = lista(&["a", "b", "c"]);
         let ultimo = list.tasks[2].id;
-        list.remove(ultimo);
+        assert!(list.take(ultimo).is_some());
         save(&path, &list).unwrap();
         let mut c = load(&path).unwrap();
         let novo = c.list.add("d").unwrap();
