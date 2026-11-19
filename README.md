@@ -65,3 +65,7 @@ git tag -a v0.6.0 --cleanup=verbatim -F notas.md; git push origin v0.6.0
 ```
 
 O CI roda fmt/clippy/testes, confere se a tag bate com o `Cargo.toml`, compila e publica a release com o `.exe`.
+
+## Licença
+
+[MIT](LICENSE): use, modifique e distribua à vontade, mantendo o aviso de copyright.
