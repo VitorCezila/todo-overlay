@@ -6,22 +6,22 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Task {
+pub struct Tarefa {
     pub id: u64,
     pub text: String,
     pub done: bool,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TaskList {
-    pub tasks: Vec<Task>,
+pub struct ListaTarefas {
+    pub tasks: Vec<Tarefa>,
     #[serde(default)]
     next_id: u64,
 }
 
-impl TaskList {
+impl ListaTarefas {
     /// Adiciona uma tarefa. Texto vazio ou só com espaços é ignorado.
-    pub fn add(&mut self, text: &str) -> Option<u64> {
+    pub fn adicionar(&mut self, text: &str) -> Option<u64> {
         let text = text.trim();
         if text.is_empty() {
             return None;
@@ -29,7 +29,7 @@ impl TaskList {
         // `normalizar` renumera antes de chegar perto do limite; isto é só a rede.
         let id = self.next_id.checked_add(1)?;
         self.next_id = id;
-        self.tasks.push(Task {
+        self.tasks.push(Tarefa {
             id,
             text: text.to_owned(),
             done: false,
@@ -39,7 +39,7 @@ impl TaskList {
 
     /// Troca o texto de uma tarefa. Texto vazio (após aparar) ou igual ao
     /// atual não muda nada — o texto antigo é mantido.
-    pub fn edit(&mut self, id: u64, text: &str) -> bool {
+    pub fn editar(&mut self, id: u64, text: &str) -> bool {
         let text = text.trim();
         if text.is_empty() {
             return false;
@@ -54,7 +54,7 @@ impl TaskList {
     }
 
     /// Alterna concluída/pendente. Devolve `false` se o id não existe.
-    pub fn toggle(&mut self, id: u64) -> bool {
+    pub fn alternar(&mut self, id: u64) -> bool {
         match self.tasks.iter_mut().find(|t| t.id == id) {
             Some(t) => {
                 t.done = !t.done;
@@ -65,25 +65,25 @@ impl TaskList {
     }
 
     /// Apaga a tarefa (`None` se o id não existe) e devolve a posição que ela
-    /// ocupava, para poder ser devolvida com [`TaskList::restore`] ("Desfazer").
-    pub fn take(&mut self, id: u64) -> Option<(usize, Task)> {
+    /// ocupava, para poder ser devolvida com [`ListaTarefas::restaurar`] ("Desfazer").
+    pub fn tirar(&mut self, id: u64) -> Option<(usize, Tarefa)> {
         let pos = self.tasks.iter().position(|t| t.id == id)?;
         Some((pos, self.tasks.remove(pos)))
     }
 
-    /// Devolve uma tarefa tirada por [`TaskList::take`] na posição `pos`
+    /// Devolve uma tarefa tirada por [`ListaTarefas::tirar`] na posição `pos`
     /// (ou no fim, se a lista encolheu). Recusa se o id já existe. `next_id`
     /// não muda: ele nunca diminui, então o id restaurado não será reutilizado.
-    pub fn restore(&mut self, pos: usize, task: Task) -> bool {
-        if self.tasks.iter().any(|t| t.id == task.id) {
+    pub fn restaurar(&mut self, pos: usize, tarefa: Tarefa) -> bool {
+        if self.tasks.iter().any(|t| t.id == tarefa.id) {
             return false;
         }
         let pos = pos.min(self.tasks.len());
-        self.tasks.insert(pos, task);
+        self.tasks.insert(pos, tarefa);
         true
     }
 
-    pub fn pending_count(&self) -> usize {
+    pub fn pendentes(&self) -> usize {
         self.tasks.iter().filter(|t| !t.done).count()
     }
 
@@ -111,297 +111,297 @@ mod tests {
 
     #[test]
     fn adicionar_ignora_texto_vazio() {
-        let mut list = TaskList::default();
-        assert_eq!(list.add("   "), None);
-        assert!(list.tasks.is_empty());
+        let mut lista = ListaTarefas::default();
+        assert_eq!(lista.adicionar("   "), None);
+        assert!(lista.tasks.is_empty());
     }
 
     #[test]
     fn adicionar_gera_ids_unicos_e_aparar_texto() {
-        let mut list = TaskList::default();
-        let a = list.add("  Reunião às 15h ✅ ").unwrap();
-        let b = list.add("Comprar café").unwrap();
+        let mut lista = ListaTarefas::default();
+        let a = lista.adicionar("  Reunião às 15h ✅ ").unwrap();
+        let b = lista.adicionar("Comprar café").unwrap();
         assert_ne!(a, b);
-        assert_eq!(list.tasks[0].text, "Reunião às 15h ✅");
+        assert_eq!(lista.tasks[0].text, "Reunião às 15h ✅");
     }
 
     #[test]
     fn concluir_e_apagar() {
-        let mut list = TaskList::default();
-        let a = list.add("a").unwrap();
-        let b = list.add("b").unwrap();
-        assert!(list.toggle(a));
-        assert_eq!(list.pending_count(), 1);
-        assert!(list.take(b).is_some());
-        assert_eq!(list.tasks.len(), 1);
-        assert!(list.tasks[0].done);
+        let mut lista = ListaTarefas::default();
+        let a = lista.adicionar("a").unwrap();
+        let b = lista.adicionar("b").unwrap();
+        assert!(lista.alternar(a));
+        assert_eq!(lista.pendentes(), 1);
+        assert!(lista.tirar(b).is_some());
+        assert_eq!(lista.tasks.len(), 1);
+        assert!(lista.tasks[0].done);
     }
 
-    fn lista_com(textos: &[&str]) -> (TaskList, Vec<u64>) {
-        let mut list = TaskList::default();
-        let ids = textos.iter().map(|t| list.add(t).unwrap()).collect();
-        (list, ids)
+    fn lista_com(textos: &[&str]) -> (ListaTarefas, Vec<u64>) {
+        let mut lista = ListaTarefas::default();
+        let ids = textos.iter().map(|t| lista.adicionar(t).unwrap()).collect();
+        (lista, ids)
     }
 
     #[test]
     fn adicionar_preserva_ordem_de_insercao() {
-        let (list, ids) = lista_com(&["primeira", "segunda", "terceira"]);
-        let textos: Vec<_> = list.tasks.iter().map(|t| t.text.as_str()).collect();
+        let (lista, ids) = lista_com(&["primeira", "segunda", "terceira"]);
+        let textos: Vec<_> = lista.tasks.iter().map(|t| t.text.as_str()).collect();
         assert_eq!(textos, ["primeira", "segunda", "terceira"]);
         assert!(ids.windows(2).all(|w| w[0] < w[1]));
-        assert!(list.tasks.iter().all(|t| !t.done));
+        assert!(lista.tasks.iter().all(|t| !t.done));
     }
 
     #[test]
     fn adicionar_ignora_string_vazia_e_quebras_de_linha() {
-        let mut list = TaskList::default();
-        assert_eq!(list.add(""), None);
-        assert_eq!(list.add("\t\n  \r\n"), None);
-        assert!(list.tasks.is_empty());
+        let mut lista = ListaTarefas::default();
+        assert_eq!(lista.adicionar(""), None);
+        assert_eq!(lista.adicionar("\t\n  \r\n"), None);
+        assert!(lista.tasks.is_empty());
     }
 
     #[test]
     fn ids_nao_sao_reutilizados_apos_apagar() {
-        let (mut list, ids) = lista_com(&["a", "b"]);
-        assert!(list.take(ids[1]).is_some());
-        let c = list.add("c").unwrap();
+        let (mut lista, ids) = lista_com(&["a", "b"]);
+        assert!(lista.tirar(ids[1]).is_some());
+        let c = lista.adicionar("c").unwrap();
         assert!(!ids.contains(&c));
     }
 
     #[test]
     fn editar_apara_espacos() {
-        let (mut list, ids) = lista_com(&["antigo"]);
-        assert!(list.edit(ids[0], "   novo texto  "));
-        assert_eq!(list.tasks[0].text, "novo texto");
+        let (mut lista, ids) = lista_com(&["antigo"]);
+        assert!(lista.editar(ids[0], "   novo texto  "));
+        assert_eq!(lista.tasks[0].text, "novo texto");
     }
 
     #[test]
     fn editar_com_texto_vazio_mantem_o_antigo() {
-        let (mut list, ids) = lista_com(&["antigo"]);
-        assert!(!list.edit(ids[0], ""));
-        assert!(!list.edit(ids[0], "   \t "));
-        assert_eq!(list.tasks[0].text, "antigo");
+        let (mut lista, ids) = lista_com(&["antigo"]);
+        assert!(!lista.editar(ids[0], ""));
+        assert!(!lista.editar(ids[0], "   \t "));
+        assert_eq!(lista.tasks[0].text, "antigo");
     }
 
     #[test]
     fn editar_com_texto_igual_devolve_false() {
-        let (mut list, ids) = lista_com(&["mesmo"]);
-        assert!(!list.edit(ids[0], "mesmo"));
-        assert!(!list.edit(ids[0], "  mesmo  "));
-        assert_eq!(list.tasks[0].text, "mesmo");
+        let (mut lista, ids) = lista_com(&["mesmo"]);
+        assert!(!lista.editar(ids[0], "mesmo"));
+        assert!(!lista.editar(ids[0], "  mesmo  "));
+        assert_eq!(lista.tasks[0].text, "mesmo");
     }
 
     #[test]
     fn editar_id_inexistente_devolve_false() {
-        let (mut list, ids) = lista_com(&["a"]);
-        let antes = list.clone();
-        assert!(!list.edit(ids[0] + 100, "b"));
-        assert_eq!(list, antes);
+        let (mut lista, ids) = lista_com(&["a"]);
+        let antes = lista.clone();
+        assert!(!lista.editar(ids[0] + 100, "b"));
+        assert_eq!(lista, antes);
     }
 
     #[test]
     fn editar_nao_altera_done_nem_outras_tarefas() {
-        let (mut list, ids) = lista_com(&["a", "b"]);
-        list.toggle(ids[0]);
-        assert!(list.edit(ids[0], "a2"));
-        assert!(list.tasks[0].done);
-        assert_eq!(list.tasks[1].text, "b");
+        let (mut lista, ids) = lista_com(&["a", "b"]);
+        lista.alternar(ids[0]);
+        assert!(lista.editar(ids[0], "a2"));
+        assert!(lista.tasks[0].done);
+        assert_eq!(lista.tasks[1].text, "b");
     }
 
     #[test]
     fn alternar_conclui_e_reabre() {
-        let (mut list, ids) = lista_com(&["a"]);
-        assert!(list.toggle(ids[0]));
-        assert!(list.tasks[0].done);
-        assert_eq!(list.pending_count(), 0);
-        assert!(list.toggle(ids[0]));
-        assert!(!list.tasks[0].done);
-        assert_eq!(list.pending_count(), 1);
+        let (mut lista, ids) = lista_com(&["a"]);
+        assert!(lista.alternar(ids[0]));
+        assert!(lista.tasks[0].done);
+        assert_eq!(lista.pendentes(), 0);
+        assert!(lista.alternar(ids[0]));
+        assert!(!lista.tasks[0].done);
+        assert_eq!(lista.pendentes(), 1);
     }
 
     #[test]
     fn alternar_id_inexistente_devolve_false() {
-        let (mut list, ids) = lista_com(&["a"]);
-        let antes = list.clone();
-        assert!(!list.toggle(ids[0] + 1));
-        assert!(!TaskList::default().toggle(1));
-        assert_eq!(list, antes);
+        let (mut lista, ids) = lista_com(&["a"]);
+        let antes = lista.clone();
+        assert!(!lista.alternar(ids[0] + 1));
+        assert!(!ListaTarefas::default().alternar(1));
+        assert_eq!(lista, antes);
     }
 
     #[test]
     fn apagar_id_inexistente_devolve_false() {
-        let (mut list, ids) = lista_com(&["a"]);
-        assert!(list.take(ids[0] + 1).is_none());
-        assert_eq!(list.tasks.len(), 1);
-        assert!(list.take(ids[0]).is_some());
+        let (mut lista, ids) = lista_com(&["a"]);
+        assert!(lista.tirar(ids[0] + 1).is_none());
+        assert_eq!(lista.tasks.len(), 1);
+        assert!(lista.tirar(ids[0]).is_some());
         assert!(
-            list.take(ids[0]).is_none(),
+            lista.tirar(ids[0]).is_none(),
             "apagar duas vezes devolve None"
         );
     }
 
     #[test]
     fn apagar_do_meio_preserva_ordem() {
-        let (mut list, ids) = lista_com(&["a", "b", "c"]);
-        assert!(list.take(ids[1]).is_some());
-        let textos: Vec<_> = list.tasks.iter().map(|t| t.text.as_str()).collect();
+        let (mut lista, ids) = lista_com(&["a", "b", "c"]);
+        assert!(lista.tirar(ids[1]).is_some());
+        let textos: Vec<_> = lista.tasks.iter().map(|t| t.text.as_str()).collect();
         assert_eq!(textos, ["a", "c"]);
     }
 
-    fn textos(list: &TaskList) -> Vec<&str> {
-        list.tasks.iter().map(|t| t.text.as_str()).collect()
+    fn textos(lista: &ListaTarefas) -> Vec<&str> {
+        lista.tasks.iter().map(|t| t.text.as_str()).collect()
     }
 
     #[test]
     fn tirar_e_restaurar_volta_a_mesma_ordem() {
-        let (mut list, ids) = lista_com(&["a", "b", "c"]);
-        list.toggle(ids[1]);
-        let antes = list.clone();
-        let (pos, task) = list.take(ids[1]).unwrap();
+        let (mut lista, ids) = lista_com(&["a", "b", "c"]);
+        lista.alternar(ids[1]);
+        let antes = lista.clone();
+        let (pos, tarefa) = lista.tirar(ids[1]).unwrap();
         assert_eq!(pos, 1);
-        assert_eq!(textos(&list), ["a", "c"]);
-        assert!(list.restore(pos, task));
-        assert_eq!(list, antes, "restaura texto, done e posição");
+        assert_eq!(textos(&lista), ["a", "c"]);
+        assert!(lista.restaurar(pos, tarefa));
+        assert_eq!(lista, antes, "restaura texto, done e posição");
     }
 
     #[test]
     fn tirar_id_inexistente_devolve_none() {
-        let (mut list, ids) = lista_com(&["a"]);
-        assert_eq!(list.take(ids[0] + 1), None);
-        assert_eq!(list.tasks.len(), 1);
+        let (mut lista, ids) = lista_com(&["a"]);
+        assert_eq!(lista.tirar(ids[0] + 1), None);
+        assert_eq!(lista.tasks.len(), 1);
     }
 
     #[test]
     fn restaurar_alem_do_fim_insere_no_fim() {
-        let (mut list, ids) = lista_com(&["a", "b", "c"]);
-        let (pos, task) = list.take(ids[2]).unwrap();
-        assert!(list.take(ids[1]).is_some());
-        assert!(list.restore(pos, task));
-        assert_eq!(textos(&list), ["a", "c"]);
+        let (mut lista, ids) = lista_com(&["a", "b", "c"]);
+        let (pos, tarefa) = lista.tirar(ids[2]).unwrap();
+        assert!(lista.tirar(ids[1]).is_some());
+        assert!(lista.restaurar(pos, tarefa));
+        assert_eq!(textos(&lista), ["a", "c"]);
     }
 
     #[test]
     fn restaurar_id_existente_e_recusado() {
-        let (mut list, ids) = lista_com(&["a"]);
-        let copia = list.tasks[0].clone();
-        let antes = list.clone();
-        assert!(!list.restore(0, copia));
-        assert_eq!(list, antes);
-        assert!(list.take(ids[0]).is_some());
+        let (mut lista, ids) = lista_com(&["a"]);
+        let copia = lista.tasks[0].clone();
+        let antes = lista.clone();
+        assert!(!lista.restaurar(0, copia));
+        assert_eq!(lista, antes);
+        assert!(lista.tirar(ids[0]).is_some());
     }
 
     #[test]
     fn adicionar_depois_de_restaurar_nao_repete_id() {
-        let (mut list, ids) = lista_com(&["a", "b"]);
-        let (pos, task) = list.take(ids[1]).unwrap();
-        assert!(list.restore(pos, task));
-        let novo = list.add("c").unwrap();
+        let (mut lista, ids) = lista_com(&["a", "b"]);
+        let (pos, tarefa) = lista.tirar(ids[1]).unwrap();
+        assert!(lista.restaurar(pos, tarefa));
+        let novo = lista.adicionar("c").unwrap();
         assert!(!ids.contains(&novo));
     }
 
     #[test]
     fn restaurar_varias_em_ordem_inversa_recompoe_a_lista() {
-        let (mut list, ids) = lista_com(&["a", "b", "c", "d"]);
-        let antes = list.clone();
+        let (mut lista, ids) = lista_com(&["a", "b", "c", "d"]);
+        let antes = lista.clone();
         // Apagar em sequência, como num duplo clique que pega a linha de baixo.
         let mut pilha = Vec::new();
         for id in [ids[1], ids[2], ids[0]] {
-            pilha.push(list.take(id).unwrap());
+            pilha.push(lista.tirar(id).unwrap());
         }
-        assert_eq!(textos(&list), ["d"]);
-        while let Some((pos, task)) = pilha.pop() {
-            assert!(list.restore(pos, task));
+        assert_eq!(textos(&lista), ["d"]);
+        while let Some((pos, tarefa)) = pilha.pop() {
+            assert!(lista.restaurar(pos, tarefa));
         }
-        assert_eq!(list, antes);
+        assert_eq!(lista, antes);
     }
 
     #[test]
     fn normalizar_com_next_id_ausente_nao_repete_id() {
-        let mut list: TaskList = serde_json::from_str(
+        let mut lista: ListaTarefas = serde_json::from_str(
             r#"{"tasks":[{"id":3,"text":"x","done":false},{"id":7,"text":"y","done":true}]}"#,
         )
         .unwrap();
-        list.normalizar();
-        let novo = list.add("z").unwrap();
+        lista.normalizar();
+        let novo = lista.adicionar("z").unwrap();
         assert!(![3, 7].contains(&novo));
         assert!(novo > 7);
     }
 
     #[test]
     fn normalizar_com_next_id_defasado_nao_repete_id() {
-        let mut list: TaskList = serde_json::from_str(
+        let mut lista: ListaTarefas = serde_json::from_str(
             r#"{"tasks":[{"id":3,"text":"x","done":false},{"id":7,"text":"y","done":false}],"next_id":2}"#,
         )
         .unwrap();
-        list.normalizar();
-        assert_eq!(list.add("z"), Some(8));
+        lista.normalizar();
+        assert_eq!(lista.adicionar("z"), Some(8));
     }
 
     #[test]
     fn normalizar_nao_diminui_next_id_maior() {
-        let mut list: TaskList =
+        let mut lista: ListaTarefas =
             serde_json::from_str(r#"{"tasks":[{"id":1,"text":"x","done":false}],"next_id":10}"#)
                 .unwrap();
-        list.normalizar();
-        assert_eq!(list.add("z"), Some(11));
+        lista.normalizar();
+        assert_eq!(lista.adicionar("z"), Some(11));
     }
 
     #[test]
     fn normalizar_lista_vazia_comeca_do_um() {
-        let mut list = TaskList::default();
-        list.normalizar();
-        assert_eq!(list.add("a"), Some(1));
+        let mut lista = ListaTarefas::default();
+        lista.normalizar();
+        assert_eq!(lista.adicionar("a"), Some(1));
     }
 
     #[test]
     fn normalizar_renumera_ids_duplicados() {
-        let mut list: TaskList = serde_json::from_str(
+        let mut lista: ListaTarefas = serde_json::from_str(
             r#"{"tasks":[{"id":5,"text":"a","done":false},{"id":5,"text":"b","done":true}],"next_id":5}"#,
         )
         .unwrap();
-        list.normalizar();
-        let ids: Vec<_> = list.tasks.iter().map(|t| t.id).collect();
+        lista.normalizar();
+        let ids: Vec<_> = lista.tasks.iter().map(|t| t.id).collect();
         assert_eq!(ids, [1, 2]);
-        assert_eq!(list.tasks[1].text, "b");
-        assert!(list.tasks[1].done);
-        assert!(list.take(1).is_some());
+        assert_eq!(lista.tasks[1].text, "b");
+        assert!(lista.tasks[1].done);
+        assert!(lista.tirar(1).is_some());
         assert_eq!(
-            list.tasks.len(),
+            lista.tasks.len(),
             1,
             "apagar não pode levar a duplicata junto"
         );
-        assert_eq!(list.add("c"), Some(3));
+        assert_eq!(lista.adicionar("c"), Some(3));
     }
 
     #[test]
     fn adicionar_com_id_maximo_nao_da_panic() {
-        let mut list: TaskList = serde_json::from_str(&format!(
+        let mut lista: ListaTarefas = serde_json::from_str(&format!(
             r#"{{"tasks":[{{"id":{},"text":"x","done":false}}]}}"#,
             u64::MAX
         ))
         .unwrap();
-        list.normalizar();
+        lista.normalizar();
         let r = std::panic::catch_unwind(move || {
-            let mut list = list;
-            list.add("y")
+            let mut lista = lista;
+            lista.adicionar("y")
         });
         assert!(r.is_ok(), "add deu panic com id u64::MAX");
     }
 
     #[test]
     fn acentos_e_emoji_preservados() {
-        let (mut list, ids) = lista_com(&["Reunião às 15h ✅", "Café ☕ com açúcar"]);
-        assert_eq!(list.tasks[0].text, "Reunião às 15h ✅");
-        assert_eq!(list.tasks[1].text, "Café ☕ com açúcar");
-        assert!(list.edit(ids[0], "  Revisão ção 🚀 "));
-        assert_eq!(list.tasks[0].text, "Revisão ção 🚀");
+        let (mut lista, ids) = lista_com(&["Reunião às 15h ✅", "Café ☕ com açúcar"]);
+        assert_eq!(lista.tasks[0].text, "Reunião às 15h ✅");
+        assert_eq!(lista.tasks[1].text, "Café ☕ com açúcar");
+        assert!(lista.editar(ids[0], "  Revisão ção 🚀 "));
+        assert_eq!(lista.tasks[0].text, "Revisão ção 🚀");
     }
 
     #[test]
     fn edit_distingue_maiusculas_e_acentos() {
-        let (mut list, ids) = lista_com(&["cafe"]);
-        assert!(list.edit(ids[0], "café"));
-        assert!(list.edit(ids[0], "Café"));
-        assert_eq!(list.tasks[0].text, "Café");
+        let (mut lista, ids) = lista_com(&["cafe"]);
+        assert!(lista.editar(ids[0], "café"));
+        assert!(lista.editar(ids[0], "Café"));
+        assert_eq!(lista.tasks[0].text, "Café");
     }
 }

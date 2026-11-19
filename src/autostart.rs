@@ -1,4 +1,4 @@
-//! Iniciar com o Windows via `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`. Marco 4.
+//! Iniciar com o Windows via `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
 //!
 //! O registro é a fonte da verdade (não há campo no `config.json`): o valor
 //! pode ser apagado por fora, por exemplo por um limpador de inicialização.

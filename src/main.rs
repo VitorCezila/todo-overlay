@@ -11,5 +11,5 @@ mod tema;
 mod tray;
 
 fn main() -> anyhow::Result<()> {
-    app::run()
+    app::executar()
 }

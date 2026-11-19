@@ -1,8 +1,8 @@
 //! Atalho global para mostrar/esconder (padrão `Ctrl+Alt+T`) e a thread de
-//! fundo que também hospeda o ícone da bandeja. Marco 3.
+//! fundo que também hospeda o ícone da bandeja.
 //!
 //! Com a janela invisível o eframe não pinta nem chama `ui`, então o atalho é
-//! tratado numa thread própria que chama `ShowWindow` (Win32) e depois
+//! tratado numa thread própria que chama `ShowWindowAsync` (Win32) e depois
 //! `ctx.request_repaint()`. A thread fica bloqueada em `GetMessageW` — 0% de
 //! CPU sem polling — e os handlers do `global-hotkey` e do `tray-icon` rodam
 //! dentro do `DispatchMessageW` dela.
@@ -12,7 +12,7 @@
 //! o processo seria morto sem `on_exit`. Ela pede à UI que grave o que estiver
 //! pendente (ver `Encerramento`) e espera a confirmação antes de devolver.
 //!
-//! Trocar o atalho (marco 4): o `RegisterHotKey` precisa rodar na thread dona
+//! Trocar o atalho: o `RegisterHotKey` precisa rodar na thread dona
 //! da janela oculta do `GlobalHotKeyManager`, então a UI só posta um pedido
 //! (`WM_APP_ATALHO` para a janela de sessão) e lê a resposta depois, sem
 //! bloquear (ver `Fundo::trocar_atalho`).
