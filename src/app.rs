@@ -5,8 +5,8 @@
 //! tamanho são lembrados pelo eframe (`persist_window`, em
 //! `%APPDATA%\todo-overlay\data\app.ron`).
 //! Marco 2: lista de tarefas — Enter no campo adiciona, duplo clique edita,
-//! checkbox conclui, 🗑 (no hover) apaga. Grava `tasks.json` só quando a
-//! lista muda (ver `storage`).
+//! checkbox conclui, a lixeira (no hover) apaga e "Desfazer" devolve as
+//! últimas apagadas. Grava `tasks.json` só quando a lista muda (ver `storage`).
 //! Marco 3: `Ctrl+Alt+T` (`hotkey`) e o ícone da bandeja (`tray`) mostram/escondem;
 //! o X e o Alt+F4 só escondem — sair é pela bandeja (ver `logic`).
 
@@ -15,9 +15,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use eframe::egui::{
-    self, Align, Align2, Button, Color32, CursorIcon, FontId, Id, Key, Label, Layout,
-    PointerButton, Pos2, Rect, ResizeDirection, RichText, ScrollArea, Sense, Stroke, TextEdit,
-    Vec2, ViewportCommand, pos2, vec2,
+    self, Align, Align2, Color32, CursorIcon, FontId, Id, Key, Label, Layout, PointerButton, Pos2,
+    Rect, ResizeDirection, RichText, ScrollArea, Sense, Stroke, TextEdit, Vec2, ViewportCommand,
+    pos2, vec2,
 };
 
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -110,6 +110,8 @@ fn posicao_canto(area: [f32; 4], tamanho: Vec2) -> Pos2 {
 /// Largura reservada para o botão de apagar (sempre reservada, para o texto
 /// não "pular" quando o botão aparece no hover).
 const LARGURA_APAGAR: f32 = 20.0;
+/// Quantas tarefas apagadas o "Desfazer" lembra (só em memória).
+const MAX_DESFAZER: usize = 20;
 
 struct OverlayApp {
     lista: TaskList,
@@ -119,6 +121,9 @@ struct OverlayApp {
     somente_leitura: bool,
     novo_texto: String,
     editando: Option<Edicao>,
+    /// Pilha do "Desfazer": (posição, tarefa) das últimas apagadas. Zera ao
+    /// recarregar, porque `normalizar` pode ter renumerado os ids.
+    apagadas: Vec<(usize, Task)>,
     /// Aviso do carregamento ou erro de gravação, mostrado na janela.
     mensagem: Option<String>,
     /// A última gravação falhou: tentar de novo na próxima mudança e ao sair.
@@ -157,6 +162,7 @@ impl OverlayApp {
             somente_leitura: false,
             novo_texto: String::new(),
             editando: None,
+            apagadas: Vec::new(),
             mensagem: None,
             pendente_salvar: false,
             pode_recarregar: false,
@@ -301,6 +307,26 @@ impl OverlayApp {
             }
             ui.add_space(4.0);
 
+            // Longe do botão de apagar e da barra de rolagem, para não acertar
+            // um no lugar do outro.
+            let n = self.apagadas.len();
+            if n > 0 {
+                ui.horizontal(|ui| {
+                    if n == 1 {
+                        ui.weak("Tarefa apagada");
+                    } else {
+                        ui.weak(format!("{n} tarefas apagadas"));
+                    }
+                    if ui.small_button("Desfazer").clicked()
+                        && let Some((pos, task)) = self.apagadas.pop()
+                    {
+                        let voltou = self.lista.restore(pos, task);
+                        debug_assert!(voltou, "ids são únicos e a pilha zera ao recarregar");
+                        mudou |= voltou;
+                    }
+                });
+            }
+
             ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
@@ -316,7 +342,16 @@ impl OverlayApp {
         for acao in acoes {
             mudou |= match acao {
                 Acao::Alternar(id) => self.lista.toggle(id),
-                Acao::Apagar(id) => self.lista.remove(id),
+                Acao::Apagar(id) => match self.lista.take(id) {
+                    Some(apagada) => {
+                        if self.apagadas.len() == MAX_DESFAZER {
+                            self.apagadas.remove(0);
+                        }
+                        self.apagadas.push(apagada);
+                        true
+                    }
+                    None => false,
+                },
                 Acao::Editar(id, texto) => self.lista.edit(id, &texto),
             };
         }
@@ -341,7 +376,14 @@ fn linha(ui: &mut egui::Ui, task: &Task, editando: &mut Option<Edicao>, acoes: &
 
         match editando.as_mut().filter(|e| e.id == task.id) {
             Some(ed) => {
-                let resp = ui.add(TextEdit::singleline(&mut ed.texto).desired_width(largura_texto));
+                // Id explícito: os automáticos dependem da posição na tela, que
+                // muda quando a faixa do "Desfazer" aparece/some ou uma tarefa
+                // volta; com outro id a edição perderia o foco sem ser gravada.
+                let resp = ui.add(
+                    TextEdit::singleline(&mut ed.texto)
+                        .id(Id::unique(("editar", task.id)))
+                        .desired_width(largura_texto),
+                );
                 if ed.focar {
                     resp.request_focus();
                     ed.focar = false;
@@ -386,13 +428,57 @@ fn linha(ui: &mut egui::Ui, task: &Task, editando: &mut Option<Edicao>, acoes: &
             pos2(ui.max_rect().right(), ui.min_rect().bottom()),
         );
         let visivel = ui.rect_contains_pointer(area);
-        let apagar = ui
-            .add_visible(visivel, Button::new("🗑").frame(false))
-            .on_hover_text("Apagar");
-        if apagar.clicked() {
+        if botao_lixeira(ui, visivel) {
             acoes.push(Acao::Apagar(task.id));
         }
     });
+}
+
+/// Lixeira desenhada com o painter (o glifo 🗑 não existe nas fontes padrão
+/// do egui). Invisível, só reserva o espaço (sem desenho nem dica). Devolve `true`
+/// no clique quando visível.
+fn botao_lixeira(ui: &mut egui::Ui, visivel: bool) -> bool {
+    // Sempre a mesma alocação (visível ou não), para os ids automáticos dos
+    // widgets seguintes não mudarem com o hover e tirarem o foco de uma edição.
+    let tamanho = vec2(LARGURA_APAGAR, ui.spacing().interact_size.y);
+    // Sem FOCUSABLE: uma lixeira (mesmo invisível) não pode ser parada do Tab.
+    let (r, resp) = ui.allocate_exact_size(tamanho, Sense::CLICK);
+    if !visivel {
+        return false;
+    }
+    let resp = resp.on_hover_text("Apagar");
+    let cor = if resp.hovered() {
+        ui.visuals().strong_text_color()
+    } else {
+        ui.visuals().weak_text_color()
+    };
+    let traco = Stroke::new(1.5, cor);
+    let p = ui.painter();
+    let c = r.center();
+    // Ícone de ~12 px: tampa, alça, corpo afunilado e dois frisos.
+    let tampa = c.y - 4.0;
+    p.line_segment([pos2(c.x - 6.0, tampa), pos2(c.x + 6.0, tampa)], traco);
+    p.line_segment(
+        [pos2(c.x - 2.0, tampa - 2.0), pos2(c.x + 2.0, tampa - 2.0)],
+        traco,
+    );
+    let (topo, base) = (tampa + 1.5, c.y + 6.0);
+    p.add(egui::Shape::closed_line(
+        vec![
+            pos2(c.x - 4.5, topo),
+            pos2(c.x + 4.5, topo),
+            pos2(c.x + 3.5, base),
+            pos2(c.x - 3.5, base),
+        ],
+        traco,
+    ));
+    for dx in [-1.5, 1.5] {
+        p.line_segment(
+            [pos2(c.x + dx, topo + 2.0), pos2(c.x + dx, base - 2.0)],
+            Stroke::new(1.0, cor),
+        );
+    }
+    resp.clicked()
 }
 
 impl eframe::App for OverlayApp {
