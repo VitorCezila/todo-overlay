@@ -1,0 +1,41 @@
+{
+  "version": 2,
+  "tasks": [
+    {
+      "id": 1,
+      "text": "Reunião às 15h ✅",
+      "done": false,
+      "category": 1
+    },
+    {
+      "id": 2,
+      "text": "Comprar pão e café",
+      "done": true,
+      "category": 0
+    },
+    {
+      "id": 4,
+      "text": "Revisar relatório de manutenção",
+      "done": false,
+      "category": 1
+    },
+    {
+      "id": 5,
+      "text": "Ligar para o médico 📞",
+      "done": false,
+      "category": 3
+    }
+  ],
+  "next_id": 6,
+  "categories": [
+    {
+      "id": 1,
+      "name": "Trabalho"
+    },
+    {
+      "id": 3,
+      "name": "Casa 🏠"
+    }
+  ],
+  "next_category_id": 3
+}

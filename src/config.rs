@@ -1,6 +1,6 @@
 //! Configurações do usuário em `%APPDATA%\todo-overlay\config.json`.
 //!
-//! Formato: `{"version": 1, "hotkey": "Ctrl+Alt+T", "opacity": 0.8}`.
+//! Formato: `{"version": 1, "hotkey": "Ctrl+Alt+T", "opacity": 0.8, "hide_done": false}`.
 //! Mesmas regras do `tasks.json` (ver `storage`): gravação atômica, arquivo
 //! corrompido vai para `.bak`, versão futura fica somente leitura.
 //!
@@ -42,6 +42,10 @@ pub struct Config {
     /// Opacidade do fundo da janela, de [`OPACIDADE_MIN`] a [`OPACIDADE_MAX`].
     /// Padrão: [`OPACIDADE_PADRAO`].
     pub opacity: f32,
+    /// Esconder as tarefas concluídas da lista (botão de olho na barra).
+    /// Padrão: `false`.
+    #[serde(rename = "hide_done")]
+    pub esconder_concluidas: bool,
 }
 
 impl Default for Config {
@@ -49,6 +53,7 @@ impl Default for Config {
         Self {
             hotkey: ATALHO_PADRAO.to_owned(),
             opacity: OPACIDADE_PADRAO,
+            esconder_concluidas: false,
         }
     }
 }
@@ -391,6 +396,7 @@ mod tests {
         let config = Config {
             hotkey: "Ctrl+Shift+F5".into(),
             opacity: 0.35,
+            esconder_concluidas: true,
         };
         salvar(&path, &config).unwrap();
         let c = carregar(&path).unwrap();
@@ -398,6 +404,26 @@ mod tests {
         assert!(c.aviso.is_none());
         let v: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         assert_eq!(v["version"], VERSAO_ATUAL);
+        assert_eq!(v["hide_done"], true);
+    }
+
+    #[test]
+    fn config_antigo_sem_hide_done_mostra_concluidas() {
+        let (_d, _p, c) =
+            carregar_texto(r#"{"version": 1, "hotkey": "Ctrl+Alt+T", "opacity": 0.5}"#);
+        assert!(!c.config.esconder_concluidas);
+        assert!(c.aviso.is_none());
+        let (_d, _p, c) = carregar_texto(r#"{"version": 1, "hide_done": true}"#);
+        assert!(c.config.esconder_concluidas);
+    }
+
+    #[test]
+    fn hide_done_com_tipo_errado_vira_bak() {
+        let (dir, path, c) = carregar_texto(r#"{"version": 1, "hide_done": "sim"}"#);
+        assert_eq!(c.config, Config::default());
+        assert!(c.aviso.is_some());
+        assert!(!path.exists());
+        assert_eq!(nomes(&dir), ["config.json.bak"]);
     }
 
     #[test]

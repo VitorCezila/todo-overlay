@@ -33,6 +33,9 @@ Requires only **Windows 10 or 11 (64-bit)** with a graphics driver installed. No
 | Complete | Click the checkbox |
 | Edit | Double-click the text (`Esc` cancels) |
 | Delete | Hover and click the trash icon; made a mistake? Click **Desfazer** (undo) |
+| Reorder | Hover and drag the ⠿ handle on the left of the task |
+| Tabs (categories) | `+` creates a tab; double-click renames; right-click renames or deletes it (its tasks move to **Geral**). New tasks go to the active tab |
+| Hide completed | Eye icon on the title bar (remembered) |
 | Move / resize | Drag the title bar / the edges (position is remembered) |
 | Settings | Gear icon or tray menu ("Configurações"): opacity, shortcut, start with Windows |
 
@@ -40,7 +43,7 @@ The X button and `Alt+F4` only hide the window; to quit, use **Sair** (quit) in 
 
 ## Your data
 
-Everything stays on your computer, in `%APPDATA%\todo-overlay\` (`tasks.json` and `config.json`). Nothing goes to the internet. Writes are atomic, and a corrupted file is kept as `.bak` instead of being deleted.
+Everything stays on your computer, in `%APPDATA%\todo-overlay\` (`tasks.json` and `config.json`). Nothing goes to the internet. Writes are atomic, and a corrupted file is kept as `.bak` instead of being deleted. When a `tasks.json` from an older version is opened, a copy of the original is kept as `tasks.json.v1.bak` (or the matching version).
 
 ## Footprint
 

@@ -31,6 +31,9 @@ Precisa só de **Windows 10 ou 11 (64 bits)** com o driver de vídeo instalado. 
 | Concluir | Clique na caixinha |
 | Editar | Duplo clique no texto (`Esc` cancela) |
 | Apagar | Passe o mouse e clique na lixeira; se errar, use **Desfazer** |
+| Reordenar | Passe o mouse e arraste a alça ⠿ à esquerda da tarefa |
+| Abas (categorias) | `+` cria uma aba; duplo clique renomeia; botão direito renomeia ou apaga (as tarefas vão para **Geral**). Novas tarefas entram na aba ativa |
+| Esconder concluídas | Olho na barra de título (fica lembrado) |
 | Mover / redimensionar | Arraste pelo título / pelas bordas (a posição é lembrada) |
 | Configurações | Engrenagem ou menu da bandeja: opacidade, atalho e iniciar com o Windows |
 
@@ -38,7 +41,7 @@ O X e o `Alt+F4` só escondem a janela; para fechar de vez, use **Sair** no menu
 
 ## Seus dados
 
-Tudo fica no seu computador, em `%APPDATA%\todo-overlay\` (`tasks.json` e `config.json`). Nada vai para a internet. A gravação é atômica e, se um arquivo estiver corrompido, ele é guardado como `.bak` em vez de ser apagado.
+Tudo fica no seu computador, em `%APPDATA%\todo-overlay\` (`tasks.json` e `config.json`). Nada vai para a internet. A gravação é atômica e, se um arquivo estiver corrompido, ele é guardado como `.bak` em vez de ser apagado. Ao abrir um `tasks.json` de uma versão anterior, uma cópia do original fica em `tasks.json.v1.bak` (ou da versão correspondente).
 
 ## Leveza
 

@@ -29,9 +29,9 @@ todo-overlay/
    ├─ main.rs          # ponto de entrada; sem console no build de release
    ├─ app.rs           # janela overlay + UI da lista (egui)
    ├─ app/ajustes.rs   # tela de configurações e estado do config.json
-   ├─ app/widgets.rs   # barra de título, caixa, lixeira, engrenagem, alças de resize
+   ├─ app/widgets.rs   # barra de título, caixa, lixeira, alça ⠿, engrenagem, olho, alças de resize
    ├─ tema.rs          # paleta One Half Dark + fonte Cascadia Code (lida do sistema)
-   ├─ model.rs         # Tarefa / ListaTarefas — lógica pura, SEM dependência de UI, com testes
+   ├─ model.rs         # Tarefa / Categoria / ListaTarefas — lógica pura, SEM dependência de UI, com testes
    ├─ storage.rs       # carregar/salvar tasks.json com gravação atômica + migrações
    ├─ config.rs        # Config (atalho, opacidade) em config.json, com testes
    ├─ hotkey.rs        # thread de fundo: atalho global, bandeja e janela de sessão
@@ -64,7 +64,7 @@ Antes de qualquer commit: `cargo fmt --check; cargo clippy --all-targets -- -D w
 - Mudou o formato do JSON → campo `version` + migração + teste (skill `migrar-dados`).
 - Performance: não chamar `ctx.request_repaint()` em loop; nada de alocação/clonagem pesada por frame; I/O fora do `ui`/`logic` por frame (salvar só quando a lista muda).
 - `unsafe` só em `hotkey.rs`/`app.rs` para Win32, sempre com comentário `// SAFETY:`.
-- **Idioma**: textos da interface, comentários e identificadores em português. Exceção: campos que espelham o JSON salvo (`text`, `done`, `tasks`, `next_id`, `hotkey`, `opacity`, `version`) mantêm o nome do arquivo, para não exigir migração; nomes vindos de crates (egui, Win32) ficam como são.
+- **Idioma**: textos da interface, comentários e identificadores em português. Exceção: campos que espelham o JSON salvo (`text`, `done`, `tasks`, `next_id`, `hotkey`, `opacity`, `version`) mantêm o nome do arquivo, para não exigir migração; chaves novas do JSON seguem em inglês e o campo Rust em português com `#[serde(rename)]` (ex.: `categoria` ↔ `category`, `esconder_concluidas` ↔ `hide_done`); nomes vindos de crates (egui, Win32) ficam como são.
 - Comentários explicam o *porquê* (restrição do Windows/eframe, risco de perder dados), em poucas linhas. Nada de histórico ("marco 3", "antes era..."): isso vai no commit.
 - Dependência nova só se justificar o peso; prefira `default-features = false`.
 
@@ -77,7 +77,7 @@ Antes de qualquer commit: `cargo fmt --check; cargo clippy --all-targets -- -D w
 
 ## Estado e próximos passos
 
-MVP concluído na v0.5.0: janela overlay, lista com persistência, atalho global + bandeja, configurações e iniciar com o Windows, release pelo CI. Ideias para depois (não prometidas): reordenar tarefas. O README existe em português (`README.md`) e inglês (`README.en.md`): mudou um, atualize o outro no mesmo PR.
+MVP concluído na v0.5.0: janela overlay, lista com persistência, atalho global + bandeja, configurações e iniciar com o Windows, release pelo CI. Depois: abas (categorias, `tasks.json` v2), reordenar arrastando e filtro de concluídas. O README existe em português (`README.md`) e inglês (`README.en.md`): mudou um, atualize o outro no mesmo PR.
 
 ## Restrições técnicas conhecidas
 
@@ -87,7 +87,8 @@ MVP concluído na v0.5.0: janela overlay, lista com persistência, atalho global
 - **Logoff/desligamento**: o winit não trata `WM_ENDSESSION`. A janela oculta `todo-overlay-sessao` recebe a mensagem, pede a gravação à UI (`hotkey::Encerramento`, atendido em `App::logic` → `gravar_pendencias`) e espera a confirmação por até 3 s.
 - **Trocar o atalho**: `RegisterHotKey` precisa rodar na thread do `GlobalHotKeyManager`. A UI posta `WM_APP_ATALHO` para a janela `todo-overlay-sessao` (não `PostThreadMessageW`, que se perde com o menu da bandeja aberto) e lê a resposta em `App::logic`, sem bloquear. O novo é registrado antes de soltar o antigo.
 - **Captura do atalho**: combinação já registrada por outro programa é interceptada pelo Windows e nem chega ao egui. A captura usa `physical_key` (no ABNT2, Ctrl+Alt+Q chega como "/" na tecla lógica, por ser AltGr) e `config::recusa` barra combinações que quebrariam o Windows (Shift+letra, Alt+F4, Ctrl+C, AltGr do ABNT2...).
-- **Ids do egui**: os automáticos dependem da posição; `TextEdit` que precisa manter o foco usa id explícito.
+- **Ids do egui**: os automáticos dependem da posição; `TextEdit` que precisa manter o foco usa id explícito, e a alça de arrastar usa id pela tarefa (o egui acompanha o arrasto pelo id).
+- **Abas e ordem**: a ordem de `tasks` é a da tela; cada aba é um filtro por `categoria`. Por isso `ListaTarefas::mover` posiciona relativo a outra tarefa, não a um índice (a aba pode estar filtrada).
 - O overlay não aparece sobre jogos em tela cheia exclusiva.
 
 ## Skills e agents do projeto

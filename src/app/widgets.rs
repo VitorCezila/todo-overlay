@@ -1,6 +1,7 @@
 //! Widgets desenhados à mão com o painter: barra de título, caixa de
-//! concluir, lixeira, engrenagem e alças de redimensionar (a janela não tem
-//! borda nativa, e os glifos 🗑/⚙ não existem nas fontes padrão do egui).
+//! concluir, lixeira, alça de arrastar, engrenagem, olho do filtro e alças
+//! de redimensionar (a janela não tem borda nativa, e os glifos 🗑/⚙/⠿ não
+//! existem nas fontes padrão do egui).
 
 use eframe::egui::{
     self, Align2, CursorIcon, FontId, Id, PointerButton, Pos2, Rect, ResizeDirection, Sense,
@@ -15,6 +16,36 @@ const BORDA_RESIZE: f32 = 6.0;
 /// Largura reservada para o botão de apagar (sempre reservada, para o texto
 /// não "pular" quando o botão aparece no hover).
 pub(super) const LARGURA_APAGAR: f32 = 20.0;
+
+/// Largura reservada para a alça de arrastar (sempre, como a da lixeira).
+pub(super) const LARGURA_ALCA: f32 = 12.0;
+
+/// Alça ⠿ para reordenar: reserva o espaço sempre e só desenha os pontos
+/// quando `visivel`. Id explícito pela tarefa: o egui acompanha o arrasto
+/// pelo id, e o automático mudaria se a lista andasse durante o arrasto.
+pub(super) fn alca_arrastar(ui: &mut egui::Ui, id: Id, visivel: bool) -> egui::Response {
+    let tamanho = vec2(LARGURA_ALCA, ui.spacing().interact_size.y);
+    let (r, _) = ui.allocate_exact_size(tamanho, Sense::hover());
+    let resp = ui.interact(r, id, Sense::drag());
+    let ativa = resp.dragged() || resp.hovered();
+    if !visivel && !ativa {
+        return resp;
+    }
+    let resp = resp.on_hover_cursor(CursorIcon::Grab);
+    let cor = if ativa {
+        cor::AZUL
+    } else {
+        ui.visuals().weak_text_color()
+    };
+    let c = r.center();
+    for dx in [-2.0, 2.0] {
+        for dy in [-4.0, 0.0, 4.0] {
+            ui.painter()
+                .circle_filled(pos2(c.x + dx, c.y + dy), 1.1, cor);
+        }
+    }
+    resp
+}
 
 /// Caixa de concluir no estilo do tema: contorno discreto, ✓ verde quando
 /// feita. Focável pelo Tab; Espaço/Enter contam como clique.
@@ -95,13 +126,17 @@ pub(super) fn botao_lixeira(ui: &mut egui::Ui, visivel: bool) -> bool {
 pub(super) enum Botao {
     Fechar,
     Config,
+    Filtro,
 }
 
 /// Barra própria: arrastar move a janela. Devolve o botão clicado.
+/// `esconder_concluidas` só desenha o estado do olho do filtro (que não
+/// aparece com as configurações abertas).
 pub(super) fn barra_titulo(
     ui: &mut egui::Ui,
     pendentes: usize,
     config_aberta: bool,
+    esconder_concluidas: bool,
 ) -> Option<Botao> {
     let (barra, arrasto) =
         ui.allocate_exact_size(vec2(ui.available_width(), ALTURA_BARRA), Sense::DRAG);
@@ -163,12 +198,50 @@ pub(super) fn barra_titulo(
         .on_hover_text(dica);
     desenhar_engrenagem(ui, engrenagem.center(), config.hovered() || config_aberta);
 
+    let filtro = (!config_aberta).then(|| {
+        let olho = engrenagem.translate(vec2(-ALTURA_BARRA, 0.0));
+        let dica = if esconder_concluidas {
+            "Mostrar concluídas"
+        } else {
+            "Esconder concluídas"
+        };
+        let resp = ui
+            .interact(olho, Id::unique("filtro"), Sense::CLICK)
+            .on_hover_text(dica);
+        desenhar_olho(ui, olho.center(), esconder_concluidas, resp.hovered());
+        resp
+    });
+
     if fechar.clicked() {
         Some(Botao::Fechar)
     } else if config.clicked() {
         Some(Botao::Config)
+    } else if filtro.is_some_and(|r| r.clicked()) {
+        Some(Botao::Filtro)
     } else {
         None
+    }
+}
+
+/// Olho de ~14 px; riscado (e em destaque) quando as concluídas estão escondidas.
+fn desenhar_olho(ui: &egui::Ui, c: Pos2, riscado: bool, hover: bool) {
+    let cor = if riscado || hover {
+        cor::AZUL
+    } else {
+        ui.visuals().weak_text_color()
+    };
+    let traco = Stroke::new(1.5, cor);
+    let p = ui.painter();
+    let contorno = (0..16)
+        .map(|i| {
+            let ang = i as f32 * std::f32::consts::TAU / 16.0;
+            pos2(c.x + 7.0 * ang.cos(), c.y + 4.0 * ang.sin())
+        })
+        .collect();
+    p.add(egui::Shape::closed_line(contorno, traco));
+    p.circle_filled(c, 2.0, cor);
+    if riscado {
+        p.line_segment([c + vec2(-6.0, 6.0), c + vec2(6.0, -6.0)], traco);
     }
 }
 

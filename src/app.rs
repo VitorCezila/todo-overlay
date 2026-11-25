@@ -2,9 +2,12 @@
 //!
 //! Janela sem borda, transparente, sempre no topo e fora da taskbar;
 //! posição e tamanho são lembrados pelo eframe (`persist_window`, em
-//! `%APPDATA%\todo-overlay\data\app.ron`). Enter adiciona, duplo clique
-//! edita, a caixa conclui, a lixeira (no hover) apaga e "Desfazer" devolve
-//! as últimas apagadas; `tasks.json` só é gravado quando a lista muda.
+//! `%APPDATA%\todo-overlay\data\app.ron`). Abas separam as categorias
+//! (duplo clique ou botão direito renomeia/apaga). Enter adiciona na aba
+//! ativa, duplo clique edita, a caixa conclui, a alça ⠿ arrasta para
+//! reordenar, a lixeira (no hover) apaga e "Desfazer" devolve as últimas
+//! apagadas; o olho da barra esconde as concluídas. `tasks.json` só é gravado
+//! quando a lista muda.
 //! O X e o Alt+F4 só escondem: sair é pela bandeja (ver `logic`).
 //!
 //! Submódulos: `ajustes` (tela de configurações) e `widgets` (desenhos).
@@ -17,19 +20,21 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use eframe::egui::{
-    self, Align, Id, Key, Label, Layout, Pos2, Rect, RichText, ScrollArea, Sense, Stroke, TextEdit,
-    Vec2, ViewportCommand, pos2, vec2,
+    self, Align, CursorIcon, Id, Key, Label, Layout, Pos2, Rect, RichText, ScrollArea, Sense,
+    Stroke, TextEdit, Vec2, ViewportCommand, pos2, vec2,
 };
 
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 use crate::hotkey::{self, Fundo, Janela};
-use crate::model::{ListaTarefas, Tarefa};
+use crate::model::{GERAL, ListaTarefas, NOME_GERAL, Tarefa};
 use crate::storage;
 use crate::tema::{self, cor};
 
 use ajustes::Ajustes;
-use widgets::{Botao, LARGURA_APAGAR, alcas_redimensionar, barra_titulo, botao_lixeira, caixa};
+use widgets::{
+    Botao, LARGURA_APAGAR, alca_arrastar, alcas_redimensionar, barra_titulo, botao_lixeira, caixa,
+};
 
 const NOME_APP: &str = "todo-overlay";
 const TAMANHO_INICIAL: Vec2 = Vec2::new(320.0, 420.0);
@@ -120,6 +125,12 @@ struct OverlayApp {
     somente_leitura: bool,
     novo_texto: String,
     editando: Option<Edicao>,
+    /// Categoria da aba ativa (só em memória; começa na "Geral").
+    aba: u64,
+    /// Aba sendo renomeada (o `id` da [`Edicao`] é o da categoria).
+    editando_aba: Option<Edicao>,
+    /// Tarefa sendo arrastada pela alça ⠿.
+    arrastando: Option<u64>,
     /// Pilha do "Desfazer": (posição, tarefa) das últimas apagadas. Zera ao
     /// recarregar, porque `normalizar` pode ter renumerado os ids.
     apagadas: Vec<(usize, Tarefa)>,
@@ -153,7 +164,20 @@ enum Acao {
     Alternar(u64),
     Apagar(u64),
     Editar(u64, String),
+    /// Tarefa, alvo e "depois do alvo" (ver [`ListaTarefas::mover`]).
+    Mover(u64, u64, bool),
 }
+
+enum AcaoAba {
+    Selecionar(u64),
+    Criar,
+    ComecarRenomear(u64),
+    Renomear(u64, String),
+    Apagar(u64),
+}
+
+/// Distância da borda da lista em que o arrasto passa a rolar.
+const MARGEM_ROLAGEM: f32 = 24.0;
 
 impl OverlayApp {
     fn carregar() -> Self {
@@ -163,6 +187,9 @@ impl OverlayApp {
             somente_leitura: false,
             novo_texto: String::new(),
             editando: None,
+            aba: GERAL,
+            editando_aba: None,
+            arrastando: None,
             apagadas: Vec::new(),
             mensagem: None,
             pendente_salvar: false,
@@ -278,6 +305,9 @@ impl OverlayApp {
         if let Some(ed) = self.editando.take() {
             self.pendente_salvar |= self.lista.editar(ed.id, &ed.texto);
         }
+        if let Some(ed) = self.editando_aba.take() {
+            self.pendente_salvar |= self.lista.renomear_categoria(ed.id, &ed.texto);
+        }
         if self.pendente_salvar {
             self.salvar();
         }
@@ -313,7 +343,10 @@ impl OverlayApp {
             return;
         }
 
+        mudou |= self.abas(ui, editavel);
+
         let mut acoes = Vec::new();
+        let mut aba_desfeita = None;
         ui.add_enabled_ui(editavel, |ui| {
             let campo = ui.add(
                 TextEdit::singleline(&mut self.novo_texto)
@@ -325,7 +358,7 @@ impl OverlayApp {
                     .desired_width(f32::INFINITY),
             );
             if campo.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
-                if self.lista.adicionar(&self.novo_texto).is_some() {
+                if self.lista.adicionar(&self.novo_texto, self.aba).is_some() {
                     mudou = true;
                     self.novo_texto.clear();
                 }
@@ -346,21 +379,69 @@ impl OverlayApp {
                     if ui.small_button("Desfazer").clicked()
                         && let Some((pos, tarefa)) = self.apagadas.pop()
                     {
+                        let id = tarefa.id;
                         let voltou = self.lista.restaurar(pos, tarefa);
                         debug_assert!(voltou, "ids são únicos e a pilha zera ao recarregar");
                         mudou |= voltou;
+                        // Mostra a aba onde ela voltou, senão o desfazer parece não ter feito nada.
+                        aba_desfeita = self
+                            .lista
+                            .tasks
+                            .iter()
+                            .find(|t| t.id == id)
+                            .map(|t| t.categoria);
                     }
                 });
             }
 
+            let esconder = self.ajustes.config.esconder_concluidas;
+            let aba = self.aba;
             ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    if self.lista.tasks.is_empty() {
-                        ui.weak("Nenhuma tarefa ainda");
+                    let mut linhas: Vec<(u64, Rect)> = Vec::new();
+                    let mut ocultas = 0;
+                    let mut soltou = false;
+                    for tarefa in self.lista.tasks.iter().filter(|t| t.categoria == aba) {
+                        // A tarefa em edição fica visível: escondida, o TextEdit
+                        // nunca perderia o foco e a edição ficaria sem gravar.
+                        let em_edicao = self.editando.as_ref().is_some_and(|e| e.id == tarefa.id);
+                        if esconder && tarefa.done && !em_edicao {
+                            ocultas += 1;
+                            continue;
+                        }
+                        let arrastada = self.arrastando == Some(tarefa.id);
+                        let (rect, alca) =
+                            linha(ui, tarefa, arrastada, &mut self.editando, &mut acoes);
+                        if alca.drag_started() {
+                            self.arrastando = Some(tarefa.id);
+                        }
+                        soltou |= alca.drag_stopped();
+                        linhas.push((tarefa.id, rect));
                     }
-                    for tarefa in &self.lista.tasks {
-                        linha(ui, tarefa, &mut self.editando, &mut acoes);
+                    if linhas.is_empty() {
+                        ui.weak(if ocultas > 0 {
+                            "Nenhuma tarefa pendente"
+                        } else {
+                            "Nenhuma tarefa ainda"
+                        });
+                    }
+                    if ocultas > 0 {
+                        ui.add_space(2.0);
+                        ui.weak(if ocultas == 1 {
+                            "1 concluída escondida".to_owned()
+                        } else {
+                            format!("{ocultas} concluídas escondidas")
+                        });
+                    }
+                    if let Some(id) = self.arrastando
+                        && let Arrasto::Soltou(alvo) =
+                            soltar_ou_mostrar_destino(ui, id, &linhas, soltou)
+                    {
+                        if let Some((alvo, depois)) = alvo {
+                            acoes.push(Acao::Mover(id, alvo, depois));
+                        }
+                        self.arrastando = None;
                     }
                 });
         });
@@ -379,7 +460,11 @@ impl OverlayApp {
                     None => false,
                 },
                 Acao::Editar(id, texto) => self.lista.editar(id, &texto),
+                Acao::Mover(id, alvo, depois) => self.lista.mover(id, alvo, depois),
             };
+        }
+        if let Some(aba) = aba_desfeita {
+            self.trocar_aba(aba);
         }
         if mudou {
             self.salvar();
@@ -387,12 +472,215 @@ impl OverlayApp {
     }
 }
 
+impl OverlayApp {
+    /// Barra de abas: "Geral" fixa, as criadas pelo usuário e o "+".
+    /// Devolve `true` se a lista mudou (aba criada, renomeada ou apagada).
+    fn abas(&mut self, ui: &mut egui::Ui, editavel: bool) -> bool {
+        let mut acoes = Vec::new();
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            let geral = std::iter::once((GERAL, NOME_GERAL));
+            let criadas = self
+                .lista
+                .categorias()
+                .iter()
+                .map(|c| (c.id, c.nome.as_str()));
+            for (id, nome) in geral.chain(criadas) {
+                if let Some(ed) = self.editando_aba.as_mut().filter(|e| e.id == id) {
+                    // Id explícito, como na edição de tarefa: o automático
+                    // mudaria com a largura das abas e tiraria o foco.
+                    let resp = ui.add(
+                        TextEdit::singleline(&mut ed.texto)
+                            .id(Id::unique(("renomear-aba", id)))
+                            .hint_text(nome)
+                            .desired_width(90.0),
+                    );
+                    if ed.focar {
+                        resp.request_focus();
+                        ed.focar = false;
+                    }
+                    if ui.input(|i| i.key_pressed(Key::Escape)) {
+                        self.editando_aba = None;
+                    } else if resp.lost_focus()
+                        && let Some(ed) = self.editando_aba.take()
+                    {
+                        acoes.push(AcaoAba::Renomear(ed.id, ed.texto));
+                    }
+                    continue;
+                }
+                let resp = ui.selectable_label(self.aba == id, nome);
+                if resp.clicked() {
+                    acoes.push(AcaoAba::Selecionar(id));
+                }
+                if id == GERAL || !editavel {
+                    continue;
+                }
+                if resp.double_clicked() {
+                    acoes.push(AcaoAba::ComecarRenomear(id));
+                }
+                resp.context_menu(|ui| {
+                    if ui.button("Renomear").clicked() {
+                        acoes.push(AcaoAba::ComecarRenomear(id));
+                        ui.close();
+                    }
+                    if ui
+                        .button("Apagar aba")
+                        .on_hover_text("As tarefas dela vão para Geral")
+                        .clicked()
+                    {
+                        acoes.push(AcaoAba::Apagar(id));
+                        ui.close();
+                    }
+                });
+            }
+            if editavel && ui.small_button("+").on_hover_text("Nova aba").clicked() {
+                acoes.push(AcaoAba::Criar);
+            }
+        });
+        ui.add_space(4.0);
+
+        let mut mudou = false;
+        for acao in acoes {
+            match acao {
+                AcaoAba::Selecionar(id) => self.trocar_aba(id),
+                AcaoAba::Criar => {
+                    mudou |= self.confirmar_renomear_aba();
+                    if let Some(id) = self.lista.criar_categoria("Nova aba") {
+                        mudou = true;
+                        self.trocar_aba(id);
+                        self.editando_aba = Some(Edicao {
+                            id,
+                            texto: String::new(),
+                            focar: true,
+                        });
+                    }
+                }
+                AcaoAba::ComecarRenomear(id) => {
+                    mudou |= self.confirmar_renomear_aba();
+                    let texto = self.lista.nome_categoria(id).unwrap_or_default().to_owned();
+                    self.editando_aba = Some(Edicao {
+                        id,
+                        texto,
+                        focar: true,
+                    });
+                }
+                AcaoAba::Renomear(id, nome) => mudou |= self.lista.renomear_categoria(id, &nome),
+                AcaoAba::Apagar(id) => {
+                    if self.lista.apagar_categoria(id) {
+                        mudou = true;
+                        if self.aba == id {
+                            self.trocar_aba(GERAL);
+                        }
+                    }
+                }
+            }
+        }
+        mudou
+    }
+
+    /// Grava uma renomeação de aba em andamento (antes de começar outra, que
+    /// tomaria o lugar dela antes de o TextEdit avisar a perda de foco).
+    fn confirmar_renomear_aba(&mut self) -> bool {
+        self.editando_aba
+            .take()
+            .is_some_and(|ed| self.lista.renomear_categoria(ed.id, &ed.texto))
+    }
+
+    /// Uma edição de tarefa em andamento é confirmada antes: a linha some
+    /// com a troca de aba e o TextEdit não perderia o foco.
+    fn trocar_aba(&mut self, id: u64) {
+        if self.aba == id {
+            return;
+        }
+        if let Some(ed) = self.editando.take()
+            && self.lista.editar(ed.id, &ed.texto)
+        {
+            self.salvar();
+        }
+        self.arrastando = None;
+        self.aba = id;
+    }
+}
+
+enum Arrasto {
+    Continua,
+    /// Soltou; `None` se não há onde soltar.
+    Soltou(Option<(u64, bool)>),
+}
+
+/// Durante o arrasto: desenha a linha onde a tarefa vai cair e rola a lista
+/// perto das bordas. Ao soltar, devolve o alvo para [`ListaTarefas::mover`].
+fn soltar_ou_mostrar_destino(
+    ui: &mut egui::Ui,
+    id: u64,
+    linhas: &[(u64, Rect)],
+    soltou: bool,
+) -> Arrasto {
+    // A linha arrastada pode ter sumido (ex.: concluída com o filtro ligado)
+    // sem o egui avisar o fim do arrasto.
+    let segurando = ui.input(|i| i.pointer.primary_down());
+    let presente = linhas.iter().any(|(l, _)| *l == id);
+    let Some(p) = ui.ctx().pointer_interact_pos().filter(|_| presente) else {
+        return Arrasto::Soltou(None);
+    };
+    // Primeira linha cujo meio está abaixo do ponteiro → antes dela; senão,
+    // depois da última.
+    let alvo = match linhas.iter().find(|(_, r)| p.y < r.center().y) {
+        Some(&(alvo, r)) => Some((alvo, false, r.top())),
+        None => linhas.last().map(|&(alvo, r)| (alvo, true, r.bottom())),
+    };
+    if soltou {
+        return Arrasto::Soltou(alvo.map(|(a, depois, _)| (a, depois)));
+    }
+    // Botão solto sem o egui ver o fim do arrasto (janela escondida no meio)
+    // ou Esc: cancela, em vez de soltar onde o ponteiro estiver.
+    if !segurando || ui.input(|i| i.key_pressed(Key::Escape)) {
+        return Arrasto::Soltou(None);
+    }
+
+    ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
+    if let Some((_, depois, y)) = alvo {
+        // No meio do espaço entre as linhas.
+        let meio = ui.spacing().item_spacing.y / 2.0;
+        let y = if depois { y + meio } else { y - meio };
+        ui.painter()
+            .hline(ui.max_rect().x_range(), y, Stroke::new(2.0, cor::AZUL));
+    }
+    let visivel = ui.clip_rect();
+    let passo = if p.y < visivel.top() + MARGEM_ROLAGEM {
+        8.0
+    } else if p.y > visivel.bottom() - MARGEM_ROLAGEM {
+        -8.0
+    } else {
+        0.0
+    };
+    if passo != 0.0 {
+        ui.scroll_with_delta(vec2(0.0, passo));
+        // Só enquanto o botão está pressionado perto da borda.
+        ui.ctx().request_repaint();
+    }
+    Arrasto::Continua
+}
+
 const PREFIXO_ERRO_SALVAR: &str = "Erro ao salvar: ";
 
-/// Uma tarefa: checkbox, texto (duplo clique edita) e botão de apagar no hover.
-fn linha(ui: &mut egui::Ui, tarefa: &Tarefa, editando: &mut Option<Edicao>, acoes: &mut Vec<Acao>) {
-    // Topo: caixa e lixeira alinhadas à primeira linha de um texto quebrado.
-    ui.horizontal_top(|ui| {
+/// Uma tarefa: alça de arrastar, checkbox, texto (duplo clique edita) e
+/// botão de apagar no hover. Devolve a área da linha e a resposta da alça.
+fn linha(
+    ui: &mut egui::Ui,
+    tarefa: &Tarefa,
+    arrastada: bool,
+    editando: &mut Option<Edicao>,
+    acoes: &mut Vec<Acao>,
+) -> (Rect, egui::Response) {
+    let id_alca = Id::unique(("arrastar", tarefa.id));
+    // O hover da linha inteira só se sabe no fim dela, depois da alça: usa
+    // a área da linha no frame anterior, guardada pelo id da alça.
+    let area_antes: Option<Rect> = ui.data(|d| d.get_temp(id_alca));
+    let hover_antes = area_antes.is_some_and(|r| ui.rect_contains_pointer(r));
+    // Topo: alça, caixa e lixeira alinhadas à primeira linha de um texto quebrado.
+    let r = ui.horizontal_top(|ui| {
+        let alca = alca_arrastar(ui, id_alca, arrastada || hover_antes);
         if caixa(ui, tarefa.done).clicked() {
             acoes.push(Acao::Alternar(tarefa.id));
         }
@@ -453,11 +741,17 @@ fn linha(ui: &mut egui::Ui, tarefa: &Tarefa, editando: &mut Option<Edicao>, acoe
             ui.min_rect().min,
             pos2(ui.max_rect().right(), ui.min_rect().bottom()),
         );
-        let visivel = ui.rect_contains_pointer(area);
+        let visivel = ui.rect_contains_pointer(area) && !arrastada;
         if botao_lixeira(ui, visivel) {
             acoes.push(Acao::Apagar(tarefa.id));
         }
+        alca
     });
+    let area = r.response.rect;
+    if area_antes != Some(area) {
+        ui.data_mut(|d| d.insert_temp(id_alca, area));
+    }
+    (area, r.inner)
 }
 
 impl eframe::App for OverlayApp {
@@ -509,8 +803,13 @@ impl eframe::App for OverlayApp {
             .show(ui, |ui| {
                 ui.set_min_size(ui.available_size());
                 let aberta = self.ajustes.aberta;
-                match barra_titulo(ui, self.lista.pendentes(), aberta) {
+                let esconder = self.ajustes.config.esconder_concluidas;
+                match barra_titulo(ui, self.lista.pendentes(), aberta, esconder) {
                     Some(Botao::Fechar) => self.esconder_ou_fechar(ui.ctx()),
+                    Some(Botao::Filtro) => {
+                        self.ajustes.config.esconder_concluidas = !esconder;
+                        self.ajustes.salvar();
+                    }
                     Some(Botao::Config) if aberta => self.ajustes.fechar(),
                     Some(Botao::Config) => self.abrir_config(),
                     None => {}
