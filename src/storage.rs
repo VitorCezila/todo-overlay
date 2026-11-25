@@ -1,6 +1,9 @@
 //! Persistência de `%APPDATA%\todo-overlay\tasks.json`.
 //!
-//! Formato: `{"version": 1, "tasks": [...], "next_id": N}`.
+//! Formato (v2): `{"version": 2, "tasks": [{"id", "text", "done", "category"}],
+//! "next_id": N, "categories": [{"id", "name"}], "next_category_id": M}`.
+//! A v1 não tinha categorias; a v2 subiu a versão para que um app antigo abra
+//! o arquivo só para leitura em vez de gravar por cima e descartar as abas.
 //! - Gravação atômica: escreve `tasks.json.tmp` e renomeia por cima.
 //! - Arquivo corrompido (JSON inválido ou formato inesperado) → renomeado
 //!   para `.bak` (sem nunca sobrescrever um backup existente) e a lista
@@ -22,7 +25,7 @@ use serde_json::Value;
 use crate::model::ListaTarefas;
 
 /// Versão atual do formato de `tasks.json`.
-pub const VERSAO_ATUAL: u64 = 1;
+pub const VERSAO_ATUAL: u64 = 2;
 
 const NOME_APP: &str = "todo-overlay";
 const NOME_ARQUIVO: &str = "tasks.json";
@@ -85,17 +88,57 @@ pub fn carregar(path: &Path) -> anyhow::Result<Carregado> {
         });
     }
 
-    let valor = migrar(valor, versao);
-    match serde_json::from_value::<ListaTarefas>(valor) {
-        Ok(mut lista) => {
-            lista.normalizar();
-            Ok(Carregado {
-                lista,
-                ..Default::default()
-            })
-        }
-        Err(_) => corrompido(path),
+    let Ok(lista) = migrar(valor, versao)
+        .and_then(|v| serde_json::from_value::<ListaTarefas>(v).context("formato inesperado"))
+    else {
+        return corrompido(path);
+    };
+    let mut c = Carregado {
+        lista,
+        ..Default::default()
+    };
+    c.lista.normalizar();
+    // A primeira gravação vai trocar o formato: guarda o original antes.
+    if versao < VERSAO_ATUAL
+        && let Err(e) = backup_da_versao(path, &bytes, versao)
+    {
+        c.somente_leitura = true;
+        c.aviso = Some(format!(
+            "tasks.json não foi atualizado para o formato novo ({e:#}); alterações não serão salvas"
+        ));
     }
+    Ok(c)
+}
+
+/// Guarda os bytes do arquivo de formato antigo em `tasks.json.v<N>.bak`
+/// (sem sobrescrever backups). Se algum `tasks.json.v<N>*.bak` já é idêntico,
+/// não duplica: o app pode ser aberto várias vezes antes da primeira gravação.
+fn backup_da_versao(path: &Path, bytes: &[u8], versao: u64) -> anyhow::Result<()> {
+    let marca = format!(".v{versao}");
+    if ja_tem_backup(path, &marca, bytes) {
+        return Ok(());
+    }
+    let bak = caminho_backup(path, &marca);
+    gravar_atomico(&bak, bytes)
+}
+
+/// Algum `<arquivo><marca>.bak` ou `<arquivo><marca>.<ts>.bak` com estes bytes?
+fn ja_tem_backup(path: &Path, marca: &str, bytes: &[u8]) -> bool {
+    let (Some(dir), Some(nome)) = (path.parent(), path.file_name()) else {
+        return false;
+    };
+    let prefixo = format!("{}{marca}.", nome.to_string_lossy());
+    let Ok(entradas) = fs::read_dir(dir) else {
+        return false;
+    };
+    entradas.flatten().any(|e| {
+        let n = e.file_name();
+        let n = n.to_string_lossy();
+        n.starts_with(&prefixo)
+            && n.ends_with(".bak")
+            && e.metadata().is_ok_and(|m| m.len() == bytes.len() as u64)
+            && fs::read(e.path()).is_ok_and(|b| b == bytes)
+    })
 }
 
 /// Grava de forma atômica: `*.tmp` + `sync_all` + rename por cima.
@@ -138,9 +181,27 @@ pub(crate) fn versao_de(valor: &Value) -> Option<u64> {
 }
 
 /// Aplica as migrações em cadeia de `versao` até [`VERSAO_ATUAL`].
-/// Ainda não há nenhuma: v1 é o primeiro formato.
-fn migrar(valor: Value, _versao: u64) -> Value {
-    valor
+/// Nunca remover um passo: o usuário pode pular várias versões.
+fn migrar(mut valor: Value, versao: u64) -> anyhow::Result<Value> {
+    if versao < 2 {
+        valor = migrar_v1_para_v2(valor)?;
+    }
+    Ok(valor)
+}
+
+/// v1 → v2: toda tarefa vai para a aba "Geral" e não há outras abas.
+fn migrar_v1_para_v2(mut valor: Value) -> anyhow::Result<Value> {
+    let raiz = valor.as_object_mut().context("raiz não é objeto")?;
+    if let Some(tarefas) = raiz.get_mut("tasks").and_then(Value::as_array_mut) {
+        for t in tarefas {
+            let t = t.as_object_mut().context("tarefa não é objeto")?;
+            t.insert("category".into(), Value::from(crate::model::GERAL));
+        }
+    }
+    raiz.insert("categories".into(), Value::Array(Vec::new()));
+    raiz.insert("next_category_id".into(), Value::from(0));
+    raiz.insert("version".into(), Value::from(2));
+    Ok(valor)
 }
 
 /// Move o arquivo ilegível para um `.bak` e começa com a lista vazia.
@@ -157,7 +218,7 @@ fn corrompido(path: &Path) -> anyhow::Result<Carregado> {
 /// Renomeia o arquivo para o primeiro `.bak` livre e devolve o nome do
 /// backup (para o aviso). Também usado pelo `config`.
 pub(crate) fn mover_para_backup(path: &Path) -> anyhow::Result<String> {
-    let bak = caminho_backup(path);
+    let bak = caminho_backup(path, "");
     fs::rename(path, &bak).with_context(|| {
         format!(
             "{} está corrompido e não foi possível movê-lo para {}",
@@ -171,20 +232,20 @@ pub(crate) fn mover_para_backup(path: &Path) -> anyhow::Result<String> {
     ))
 }
 
-/// Primeiro nome livre entre `tasks.json.bak`, `tasks.json.<ts>.bak`,
-/// `tasks.json.<ts>-2.bak`... — nunca sobrescreve um backup existente.
-fn caminho_backup(path: &Path) -> PathBuf {
-    let simples = com_sufixo(path, ".bak");
+/// Primeiro nome livre entre `tasks.json<marca>.bak`, `tasks.json<marca>.<ts>.bak`,
+/// `tasks.json<marca>.<ts>-2.bak`... — nunca sobrescreve um backup existente.
+fn caminho_backup(path: &Path, marca: &str) -> PathBuf {
+    let simples = com_sufixo(path, &format!("{marca}.bak"));
     if !simples.exists() {
         return simples;
     }
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
-    let mut candidato = com_sufixo(path, &format!(".{ts}.bak"));
+    let mut candidato = com_sufixo(path, &format!("{marca}.{ts}.bak"));
     let mut n = 2;
     while candidato.exists() {
-        candidato = com_sufixo(path, &format!(".{ts}-{n}.bak"));
+        candidato = com_sufixo(path, &format!("{marca}.{ts}-{n}.bak"));
         n += 1;
     }
     candidato
@@ -199,6 +260,7 @@ fn com_sufixo(path: &Path, sufixo: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::GERAL;
     use tempfile::TempDir;
 
     fn tmp() -> (TempDir, PathBuf) {
@@ -210,7 +272,7 @@ mod tests {
     fn lista(textos: &[&str]) -> ListaTarefas {
         let mut lista = ListaTarefas::default();
         for t in textos {
-            lista.adicionar(t).unwrap();
+            lista.adicionar(t, GERAL).unwrap();
         }
         lista
     }
@@ -268,7 +330,7 @@ mod tests {
         assert!(lista.tirar(ultimo).is_some());
         salvar(&path, &lista).unwrap();
         let mut c = carregar(&path).unwrap();
-        let novo = c.lista.adicionar("d").unwrap();
+        let novo = c.lista.adicionar("d", GERAL).unwrap();
         assert!(
             novo > ultimo,
             "id {novo} reutilizaria o id apagado {ultimo}"
@@ -281,7 +343,9 @@ mod tests {
         salvar(&path, &lista(&["a"])).unwrap();
         let v: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         assert_eq!(v["version"], VERSAO_ATUAL);
-        assert_eq!(v["version"], 1);
+        assert_eq!(v["version"], 2);
+        assert!(v["categories"].is_array());
+        assert_eq!(v["tasks"][0]["category"], GERAL);
         assert!(v["tasks"].is_array());
     }
 
@@ -414,7 +478,7 @@ mod tests {
         assert_eq!(c.lista.tasks[0].text, "Reunião");
         assert!(c.lista.tasks[0].done);
         // sem next_id: normalizar evita repetir ids
-        assert_eq!(c.lista.adicionar("novo"), Some(8));
+        assert_eq!(c.lista.adicionar("novo", GERAL), Some(8));
         assert!(path.exists(), "carregar não deve mover o arquivo");
     }
 
@@ -533,7 +597,11 @@ mod tests {
             .map(|t| (t.id, t.text.as_str(), t.done))
             .collect();
         assert_eq!(obtido, esperado);
-        assert_eq!(c.lista.adicionar("nova"), Some(7), "next_id da fixture é 6");
+        assert_eq!(
+            c.lista.adicionar("nova", GERAL),
+            Some(7),
+            "next_id da fixture é 6"
+        );
     }
 
     #[test]
@@ -550,5 +618,105 @@ mod tests {
         // serde aceita structs como sequência: `[[]]` vira ListaTarefas vazia
         // silenciosamente em vez de ir para o .bak.
         assert_vira_bak(b"[[]]");
+    }
+
+    #[test]
+    fn fixture_v1_migra_tudo_para_a_geral_e_faz_backup() {
+        let (dir, path) = tmp();
+        let v1 = include_str!("../tests/fixtures/tasks_v1.json");
+        fs::write(&path, v1).unwrap();
+        let c = carregar(&path).unwrap();
+        assert!(c.aviso.is_none());
+        assert!(!c.somente_leitura);
+        assert_eq!(c.lista.tasks.len(), 4);
+        assert!(c.lista.tasks.iter().all(|t| t.categoria == GERAL));
+        assert!(c.lista.categorias().is_empty());
+        assert_eq!(fs::read_to_string(&path).unwrap(), v1, "original intacto");
+        assert_eq!(
+            fs::read_to_string(com_sufixo(&path, ".v1.bak")).unwrap(),
+            v1
+        );
+        assert_eq!(arquivos(&dir), ["tasks.json", "tasks.json.v1.bak"]);
+    }
+
+    #[test]
+    fn abrir_v1_varias_vezes_nao_duplica_backup() {
+        let (dir, path) = tmp();
+        fs::write(&path, include_str!("../tests/fixtures/tasks_v1.json")).unwrap();
+        carregar(&path).unwrap();
+        carregar(&path).unwrap();
+        assert_eq!(arquivos(&dir), ["tasks.json", "tasks.json.v1.bak"]);
+    }
+
+    #[test]
+    fn backup_v1_diferente_nao_e_sobrescrito() {
+        let (dir, path) = tmp();
+        let antigo = r#"{"tasks":[{"id":1,"text":"velho","done":false}]}"#;
+        fs::write(com_sufixo(&path, ".v1.bak"), antigo).unwrap();
+        fs::write(&path, include_str!("../tests/fixtures/tasks_v1.json")).unwrap();
+        carregar(&path).unwrap();
+        assert_eq!(
+            fs::read_to_string(com_sufixo(&path, ".v1.bak")).unwrap(),
+            antigo
+        );
+        assert_eq!(arquivos(&dir).len(), 3, "{:?}", arquivos(&dir));
+        carregar(&path).unwrap();
+        assert_eq!(arquivos(&dir).len(), 3, "reabrir não acumula backups");
+    }
+
+    #[test]
+    fn v1_migrado_e_gravado_vira_v2() {
+        let (_dir, path) = tmp();
+        fs::write(&path, include_str!("../tests/fixtures/tasks_v1.json")).unwrap();
+        let mut c = carregar(&path).unwrap();
+        let cat = c.lista.criar_categoria("Trabalho").unwrap();
+        c.lista.adicionar("nova", cat).unwrap();
+        salvar(&path, &c.lista).unwrap();
+        let de_novo = carregar(&path).unwrap();
+        assert_eq!(de_novo.lista, c.lista);
+        let v: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(v["version"], 2);
+    }
+
+    #[test]
+    fn fixture_v2_carrega_categorias_e_ordem() {
+        let (dir, path) = tmp();
+        fs::write(&path, include_str!("../tests/fixtures/tasks_v2.json")).unwrap();
+        let mut c = carregar(&path).unwrap();
+        assert!(c.aviso.is_none());
+        assert!(!c.somente_leitura);
+        let obtido: Vec<_> = c
+            .lista
+            .tasks
+            .iter()
+            .map(|t| (t.id, t.text.as_str(), t.done, t.categoria))
+            .collect();
+        assert_eq!(
+            obtido,
+            [
+                (1, "Reunião às 15h ✅", false, 1),
+                (2, "Comprar pão e café", true, GERAL),
+                (4, "Revisar relatório de manutenção", false, 1),
+                (5, "Ligar para o médico 📞", false, 3),
+            ]
+        );
+        assert_eq!(c.lista.nome_categoria(1), Some("Trabalho"));
+        assert_eq!(c.lista.nome_categoria(3), Some("Casa 🏠"));
+        assert_eq!(c.lista.criar_categoria("x"), Some(4));
+        assert_eq!(arquivos(&dir), ["tasks.json"], "v2 não faz backup");
+    }
+
+    #[test]
+    fn fixture_v2_ida_e_volta_mantem_dados() {
+        let (_dir, path) = tmp();
+        fs::write(&path, include_str!("../tests/fixtures/tasks_v2.json")).unwrap();
+        let original = carregar(&path).unwrap().lista;
+        salvar(&path, &original).unwrap();
+        assert_eq!(carregar(&path).unwrap().lista, original);
+    }
+
+    #[test]
+    fn v1_com_tarefa_que_nao_e_objeto_vira_bak() {
+        assert_vira_bak(br#"{"version": 1, "tasks": [42]}"#);
     }
 }
